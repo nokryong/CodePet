@@ -443,7 +443,8 @@ function applyPet(petKey) {
 const BUBBLE_CONFIG = Object.freeze({
   width: 270,
   minHeight: 48,
-  maxHeight: 420,
+  // provider 세 곳의 한도를 한 말풍선에 담으므로 게이지가 최대 10줄까지 늘어납니다.
+  maxHeight: 500,
   gapPx: 2,
   renderFallbackMs: 350,
   loadTimeoutMs: 2500,
@@ -2640,30 +2641,59 @@ function usageErrorText(reason) {
   return reason?.message || (reason ? String(reason) : null);
 }
 
+// 말풍선용 AGY 한도만 조회합니다. 프로필 저장은 설정 화면 경로가 담당합니다.
+async function fetchAntigravityUsageForBubble() {
+  const credential = await antigravityAccountSwitcher.read();
+  return fetchAntigravityUsage({ credential });
+}
+
 // 더블클릭 시 호출됩니다. 로그/세션 캐시는 쓰지 않고 현재 live auth로 즉시 조회합니다.
-// Codex와 Claude를 함께 조회해서 한 말풍선에 두 provider의 한도를 모두 보여줍니다.
+// Codex · Claude · AGY를 함께 조회해서 한 말풍선에 세 provider의 한도를 모두 보여줍니다.
 async function showUsageBubble() {
   showBubble({
     kind: "activity",
     title: "사용량",
     busy: true,
-    text: "현재 선택된 Codex · Claude 프로필의 사용량을 조회하는 중입니다.",
+    text: "현재 선택된 Codex · Claude · AGY 프로필의 사용량을 조회하는 중입니다.",
     actions: [],
   });
 
-  const [codexResult, claudeResult] = await Promise.allSettled([
+  const [codexResult, claudeResult, agyResult] = await Promise.allSettled([
     codexAccountSwitcher.fetchCurrentUsage(),
     fetchClaudeUsage({ credentialStore: claudeLiveStore }),
+    fetchAntigravityUsageForBubble(),
   ]);
 
   const codexUsage = codexResult.status === "fulfilled" ? codexResult.value : null;
+  const claudeUsage = claudeResult.status === "fulfilled" ? claudeResult.value : null;
+  const agyUsage = agyResult.status === "fulfilled" ? agyResult.value : null;
+  const codexData = codexUsage ? buildUsageBubbleData(codexUsage) : null;
+
   showBubble(
     mergeUsageBubbleData({
-      codex: codexUsage ? buildUsageBubbleData(codexUsage) : null,
-      codexError: usageErrorText(codexResult.reason),
-      claude: claudeResult.status === "fulfilled" ? claudeResult.value.gauges : null,
-      claudeError: usageErrorText(claudeResult.reason),
-      claudeAccount: currentClaudeAccountSummary(),
+      providers: [
+        {
+          name: "Codex",
+          gauges: codexData?.gauges,
+          footer: codexData?.footer,
+          error: usageErrorText(codexResult.reason),
+        },
+        {
+          name: "Claude",
+          gauges: claudeUsage?.gauges,
+          account: currentClaudeAccountSummary(),
+          error: usageErrorText(claudeResult.reason),
+          formatResetText: true,
+        },
+        {
+          name: "AGY",
+          gauges: agyUsage?.gauges,
+          account: agyUsage ? { plan: agyUsage.plan, label: agyUsage.email } : null,
+          error: usageErrorText(agyResult.reason),
+          formatResetText: true,
+          compactLabel: true,
+        },
+      ],
       formatReset: formatResetInfo,
     })
   );
