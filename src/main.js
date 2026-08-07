@@ -33,6 +33,7 @@ const {
 const { normalizeFontFamily, normalizeFontSize } = require("./appearance-settings");
 const { buildAccountSubmenu } = require("./account-submenu");
 const { rateWindowLabel } = require("./codex-usage-label");
+const { mergeUsageBubbleData } = require("./usage-bubble-merge");
 const { commandNeedsShell, selectCommandPath } = require("./command-resolution");
 const { createChatFeature } = require("./chat/chat-ipc");
 const { buildWindowsCodexLaunchScript } = require("./codex-desktop-launch");
@@ -2626,31 +2627,47 @@ function buildUsageBubbleData(usage) {
   };
 }
 
+// 말풍선 footer에 쓸 현재 Claude 계정입니다. 저장된 프로필이 없으면 null입니다.
+function currentClaudeAccountSummary() {
+  try {
+    return claudeAccountSwitcher.listProfiles().find((profile) => profile.active) || null;
+  } catch {
+    return null;
+  }
+}
+
+function usageErrorText(reason) {
+  return reason?.message || (reason ? String(reason) : null);
+}
+
 // 더블클릭 시 호출됩니다. 로그/세션 캐시는 쓰지 않고 현재 live auth로 즉시 조회합니다.
+// Codex와 Claude를 함께 조회해서 한 말풍선에 두 provider의 한도를 모두 보여줍니다.
 async function showUsageBubble() {
   showBubble({
     kind: "activity",
-    title: "Codex 사용량",
+    title: "사용량",
     busy: true,
-    text: "현재 선택된 Codex 프로필의 사용량을 조회하는 중입니다.",
+    text: "현재 선택된 Codex · Claude 프로필의 사용량을 조회하는 중입니다.",
     actions: [],
   });
 
-  try {
-    const usage = await codexAccountSwitcher.fetchCurrentUsage();
-    const data = buildUsageBubbleData(usage);
-    showBubble(data);
-    maybeWarnUsage(usage);
-  } catch (error) {
-    const current = codexAccountSwitcher.getCurrentAccountSummary();
-    showBubble({
-      kind: "activity",
-      title: "Codex 사용량",
-      busy: false,
-      text: `현재 프로필: ${current.label}\n사용량을 직접 조회하지 못했습니다.\n${error.message || String(error)}`,
-      actions: [],
-    });
-  }
+  const [codexResult, claudeResult] = await Promise.allSettled([
+    codexAccountSwitcher.fetchCurrentUsage(),
+    fetchClaudeUsage({ credentialStore: claudeLiveStore }),
+  ]);
+
+  const codexUsage = codexResult.status === "fulfilled" ? codexResult.value : null;
+  showBubble(
+    mergeUsageBubbleData({
+      codex: codexUsage ? buildUsageBubbleData(codexUsage) : null,
+      codexError: usageErrorText(codexResult.reason),
+      claude: claudeResult.status === "fulfilled" ? claudeResult.value.gauges : null,
+      claudeError: usageErrorText(claudeResult.reason),
+      claudeAccount: currentClaudeAccountSummary(),
+      formatReset: formatResetInfo,
+    })
+  );
+  if (codexUsage) maybeWarnUsage(codexUsage);
 
   bubbleHideTimer = setTimeout(() => {
     restoreActiveActivityBubble();
