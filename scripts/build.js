@@ -26,13 +26,17 @@ function cleanPrivateBuildMetadata() {
 function resolveTargetPlatform() {
   if (process.argv.includes("--win")) return Platform.WINDOWS;
   if (process.argv.includes("--mac")) return Platform.MAC;
-  return process.platform === "darwin" ? Platform.MAC : Platform.WINDOWS;
+  if (process.argv.includes("--linux")) return Platform.LINUX;
+  if (process.platform === "darwin") return Platform.MAC;
+  if (process.platform === "linux") return Platform.LINUX;
+  return Platform.WINDOWS;
 }
 
 async function main() {
   try {
     await build({
       projectDir,
+      publish: "never",
       targets: resolveTargetPlatform().createTarget(),
     });
   } finally {

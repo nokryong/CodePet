@@ -1,9 +1,20 @@
 {
   "name": "code-pet",
-  "version": "0.3.2",
-  "private": true,
+  "version": "1.0.1",
+  "private": false,
   "description": "Multi-provider desktop companion for Codex, Antigravity, and Claude.",
+  "desktopName": "CodePet.desktop",
   "main": "src/main.js",
+  "license": "MIT",
+  "bin": {
+    "code-pet": "bin/code-pet.js"
+  },
+  "files": [
+    "src/**/*",
+    "bin/**/*",
+    "build/icon.ico",
+    "build/icon.png"
+  ],
   "scripts": {
     "start": "electron .",
     "dev": "electron .",
@@ -45,13 +56,25 @@
       "icon": "build/icon-mac.png",
       "category": "public.app-category.utilities",
       "target": [
-        "dmg",
-        "zip"
-      ]
+        "dmg"
+      ],
+      "artifactName": "CodePet-${version}-mac.${ext}"
+    },
+    "linux": {
+      "icon": "build/icon.png",
+      "category": "Utility",
+      "synopsis": "Desktop companion for Codex, Antigravity, and Claude",
+      "syncDesktopName": true,
+      "target": [
+        "AppImage"
+      ],
+      "artifactName": "CodePet-${version}-linux-${arch}.${ext}"
     }
   },
+  "optionalDependencies": {
+    "electron": "^41.10.4"
+  },
   "devDependencies": {
-    "electron": "^40.10.6",
     "electron-builder": "^26.15.3"
   }
 }

@@ -14,6 +14,7 @@ const bubbleCss = source("src/bubble.css");
 const bubbleJs = source("src/bubble.js");
 const mainJs = source("src/main.js");
 const rendererJs = source("src/renderer.js");
+const packageJson = JSON.parse(source("package.json"));
 
 test("클릭 가능한 말풍선 hover는 사용자 지정 배경색을 덮어쓰지 않는다", () => {
   assert.match(bubbleCss, /\.bubble\s*\{[^}]*background:\s*var\(--bubble-bg\)/s);
@@ -28,10 +29,12 @@ test("설정 창은 테마 선택 없이 색상, 설치 글꼴, 세 provider, �
   assert.doesNotMatch(settingsCss, /data-theme|theme-option|theme-preview/);
   assert.match(settingsHtml, /id="font-search"/);
   assert.match(settingsHtml, /id="font-preview"/);
+  assert.match(settingsHtml, /id="font-size"[^>]*min="10"[^>]*max="20"/);
   assert.match(settingsJs, /function resolveInstalledFontFamily/);
+  assert.match(settingsJs, /fontSize:\s*selectedFontSize/);
   assert.match(settingsHtml, /id="provider-groups"/);
   assert.match(settingsHtml, /id="usage-cards"/);
-  assert.match(settingsHtml, /VERSION 0\.3\.2/);
+  assert.match(settingsHtml, new RegExp(`VERSION ${packageJson.version.replaceAll(".", "\\.")}`));
   assert.match(settingsCss, /--font-body:\s*"Segoe UI Variable"/);
   assert.doesNotMatch(settingsHtml, /<link[^>]+href=["']https?:/);
   assert.doesNotMatch(settingsHtml, /\.\.\/assets\//);
