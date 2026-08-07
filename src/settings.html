@@ -80,7 +80,7 @@
         </nav>
 
         <div class="sidebar-foot">
-          <span class="version">VERSION 0.3.2</span>
+          <span class="version">VERSION 1.0.1</span>
         </div>
       </aside>
 
@@ -150,6 +150,11 @@
                 <select id="font" size="7" aria-describedby="font-note">
                   <option value="">시스템 기본</option>
                 </select>
+                <div class="font-size-control">
+                  <label for="font-size">글자 크기</label>
+                  <output id="font-size-value" for="font-size">12px</output>
+                  <input id="font-size" type="range" min="10" max="20" step="1" value="12" />
+                </div>
               </div>
 
               <div class="font-preview" id="font-preview" aria-live="polite">

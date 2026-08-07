@@ -7,6 +7,8 @@ const backend =
     ? require("./windows-credential")
     : process.platform === "darwin"
       ? require("./keychain-credential")
+      : process.platform === "linux"
+        ? require("./linux-credential")
       : {
           readCredential: () => Promise.reject(unsupported()),
           writeCredential: () => Promise.reject(unsupported()),

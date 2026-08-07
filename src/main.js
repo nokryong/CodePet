@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, screen, shell } = require("electron");
+const { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, screen, shell, dialog } = require("electron");
 const { spawn, spawnSync, execFile } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
@@ -30,12 +30,18 @@ const {
   normalizeWindowSize,
   restoreWindowGeometry,
 } = require("./window-geometry");
-const { normalizeFontFamily } = require("./appearance-settings");
+const { normalizeFontFamily, normalizeFontSize } = require("./appearance-settings");
 const { buildAccountSubmenu } = require("./account-submenu");
 const { rateWindowLabel } = require("./codex-usage-label");
 const { commandNeedsShell, selectCommandPath } = require("./command-resolution");
+const { createChatFeature } = require("./chat/chat-ipc");
 const { buildWindowsCodexLaunchScript } = require("./codex-desktop-launch");
 const { getInstalledFonts } = require("./installed-fonts");
+const {
+  isLinuxAutoLaunchEnabled,
+  setLinuxAutoLaunchEnabled,
+} = require("./linux-auto-launch");
+const { linuxTerminalInvocation, writeUnixLoginScript } = require("./unix-login");
 const {
   movementPreferencesPatch,
   normalizeMovementPreferences,
@@ -190,7 +196,7 @@ function getBaseDir() {
 // 아이콘 파일을 못 찾더라도 트레이 기능 자체가 죽지 않게 투명한 1px PNG를 fallback으로 만듭니다.
 function createTrayIcon() {
   // macOS 메뉴바는 .ico를 읽지 못하므로 png를 우선 사용하고, 메뉴바 크기에 맞게 줄입니다.
-  const iconNames = process.platform === "darwin" ? ["icon.png", "icon.ico"] : ["icon.ico", "icon.png"];
+  const iconNames = process.platform === "win32" ? ["icon.ico", "icon.png"] : ["icon.png", "icon.ico"];
   const iconCandidates = iconNames.flatMap((name) => [
     path.join(process.resourcesPath || "", name),
     path.join(__dirname, "..", "build", name),
@@ -448,6 +454,12 @@ const BUBBLE_CONFIG = Object.freeze({
 
 let petWindow = null;
 let settingsWindow = null;
+// 채팅 기능은 창·세션·IPC·프로세스 실행을 chat/chat-ipc.js가 조립합니다.
+const chatFeature = createChatFeature({
+  electron: { ipcMain, dialog, BrowserWindow, shell },
+  onWindowReady: () => sendAppearanceToWindows(),
+  prepareAgent: ({ agent }) => prepareChatAgent(agent),
+});
 let movementTimer = null;
 let phaseTimer = null;
 let reactionTimer = null;
@@ -561,6 +573,51 @@ function isCodexProxyModeEnabled() {
 let codexProxyActive = false;
 let codexProxyStartupPromise = null;
 let codexProxyLastError = null;
+let codexProxyRecoveryPromise = null;
+
+// 채팅에서 Codex를 실행하기 직전에 설정과 실제 리스너 상태를 다시 맞춥니다.
+// 앱 강제 종료나 오래된 인스턴스가 남긴 죽은 localhost 주소 때문에 새 CLI가
+// 재시도만 반복하는 상황을 시작 시점뿐 아니라 매 실행마다 복구합니다.
+async function ensureCodexProxyReadyForRun() {
+  if (codexProxyRecoveryPromise) return codexProxyRecoveryPromise;
+  codexProxyRecoveryPromise = (async () => {
+    if (codexProxyStartupPromise) await codexProxyStartupPromise;
+
+    if (!isCodexProxyModeEnabled()) {
+      disableProxyInConfig();
+      if (codexProxy.running) codexProxy.stop();
+      codexProxyActive = false;
+      codexProxyLastError = null;
+      return;
+    }
+
+    if (codexProxyActive && codexProxy.running) return;
+
+    try {
+      disableProxyInConfig();
+      codexProxy.stop();
+      const port = await codexProxy.start();
+      enableProxyInConfig(port);
+      codexProxyActive = true;
+      codexProxyLastError = null;
+    } catch (error) {
+      codexProxyActive = false;
+      codexProxyLastError = error;
+      try {
+        disableProxyInConfig();
+      } catch {}
+      codexProxy.stop();
+      throw new Error(`Codex 로컬 프록시 복구 실패: ${error?.message || String(error)}`);
+    }
+  })().finally(() => {
+    codexProxyRecoveryPromise = null;
+  });
+  return codexProxyRecoveryPromise;
+}
+
+async function prepareChatAgent(agent) {
+  if (agent?.id === "codex") await ensureCodexProxyReadyForRun();
+}
 
 async function setCodexProxyMode(enabled) {
   try {
@@ -1157,6 +1214,12 @@ function toggleManualPause() {
 // - 개발 모드(npm run dev): 실행 파일이 electron.exe라서 앱 경로를 인자로 함께 등록합니다.
 // - 설치형/일반 패키징: 실행 파일 자체를 등록하면 됩니다.
 function getLoginItemOptions() {
+  if (process.platform === "linux") {
+    return {
+      path: process.env.APPIMAGE || process.execPath,
+      args: app.isPackaged ? [] : [app.getAppPath()],
+    };
+  }
   if (process.env.PORTABLE_EXECUTABLE_FILE) {
     return { path: process.env.PORTABLE_EXECUTABLE_FILE };
   }
@@ -1166,10 +1229,19 @@ function getLoginItemOptions() {
 }
 
 function isAutoLaunchEnabled() {
+  if (process.platform === "linux") return isLinuxAutoLaunchEnabled();
   return app.getLoginItemSettings(getLoginItemOptions()).openAtLogin;
 }
 
 function toggleAutoLaunch() {
+  if (process.platform === "linux") {
+    const options = getLoginItemOptions();
+    setLinuxAutoLaunchEnabled(!isAutoLaunchEnabled(), {
+      executable: options.path,
+      args: options.args,
+    });
+    return;
+  }
   app.setLoginItemSettings({
     openAtLogin: !isAutoLaunchEnabled(),
     ...getLoginItemOptions(),
@@ -1233,25 +1305,48 @@ function appendDebugLog(message) {
 
 // macOS에서 더블클릭(shell.openPath)하면 Terminal이 실행하는 .command 셸 스크립트를 만듭니다.
 function writeMacLoginScript(fileName, lines) {
-  const scriptPath = path.join(app.getPath("userData"), fileName);
-  fs.writeFileSync(
-    scriptPath,
-    ["#!/bin/bash", 'export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"', ...lines, 'read -r -p "Press Enter to close..." _', ""].join("\n"),
-    { encoding: "utf8", mode: 0o755 }
-  );
-  return scriptPath;
+  return writeUnixLoginScript(app.getPath("userData"), fileName, lines);
 }
 
 function quoteShellArgument(value) {
   return `'${String(value).replace(/'/g, "'\\''")}'`;
 }
 
+async function openLoginScript(scriptPath) {
+  if (process.platform !== "linux") return shell.openPath(scriptPath);
+
+  const terminal = [
+    "x-terminal-emulator",
+    "gnome-terminal",
+    "konsole",
+    "xfce4-terminal",
+    "xterm",
+  ].map((name) => resolveCommand(name)).find(Boolean);
+  if (!terminal) return "Linux terminal emulator was not found.";
+
+  const invocation = linuxTerminalInvocation(terminal, scriptPath);
+  return new Promise((resolve) => {
+    const child = spawn(invocation.command, invocation.args, {
+      detached: true,
+      stdio: "ignore",
+    });
+    child.once("spawn", () => {
+      child.unref();
+      resolve("");
+    });
+    child.once("error", (error) => resolve(error.message || String(error)));
+  });
+}
+
 // Codex 공식 로그인 흐름을 실행할 스크립트를 만듭니다. (Windows: .cmd / macOS: .command)
 // CodePet은 토큰을 직접 받지 않고, pending profile CODEX_HOME 안에서 `codex login`만 실행하게 합니다.
 function writeCodexLoginScript(profile) {
-  if (process.platform === "darwin") {
+  if (["darwin", "linux"].includes(process.platform)) {
     const codexCommand = resolveCommand("codex", codexCommandCandidates());
-    const scriptPath = writeMacLoginScript("codepet-codex-login.command", [
+    const fileName = process.platform === "darwin"
+      ? "codepet-codex-login.command"
+      : "codepet-codex-login.sh";
+    const scriptPath = writeMacLoginScript(fileName, [
       `echo "CodePet Codex Login - ${profile.id}"`,
       `export CODEX_HOME=${quoteShellArgument(profile.homePath)}`,
       `${codexCommand ? quoteShellArgument(codexCommand) : "codex"} login`,
@@ -1325,8 +1420,8 @@ async function openCodexLoginTerminal() {
 
   try {
     codexAccountSwitcher.ensureCurrentAccountProfile();
-    if (!["win32", "darwin"].includes(process.platform)) {
-      throw new Error("현재 CodePet 로그인 실행기는 Windows/macOS용으로 작성되어 있습니다.");
+    if (!["win32", "darwin", "linux"].includes(process.platform)) {
+      throw new Error(`CodePet 로그인 실행기는 ${process.platform}을 지원하지 않습니다.`);
     }
 
     const profile = codexAccountSwitcher.createLoginProfile();
@@ -1338,7 +1433,7 @@ async function openCodexLoginTerminal() {
 
     // 여러 launcher를 순차 시도하면 실패 판정이 애매해서 터미널이 여러 개 뜹니다.
     // ShellExecute 한 경로만 사용하고, 실패하면 사용자가 직접 실행할 스크립트 경로를 보여줍니다.
-    const error = await shell.openPath(scriptPath);
+    const error = await openLoginScript(scriptPath);
     appendDebugLog(`login terminal ShellExecute: ${error || "ok"}`);
 
     if (error) {
@@ -1470,6 +1565,14 @@ function resolveAntigravityExecutable() {
     const appPath = "/Applications/Antigravity.app";
     return fs.existsSync(appPath) ? appPath : null;
   }
+  if (process.platform === "linux") {
+    return resolveCommand("antigravity", [
+      path.join(os.homedir(), ".local", "bin", "antigravity"),
+      "/usr/local/bin/antigravity",
+      "/usr/bin/antigravity",
+      "/opt/Antigravity/antigravity",
+    ]);
+  }
   return resolveCommand("Antigravity.exe", [
     path.join(process.env.LOCALAPPDATA || "", "Programs", "antigravity", "Antigravity.exe"),
     path.join(process.env.ProgramFiles || "", "Antigravity", "Antigravity.exe"),
@@ -1497,6 +1600,19 @@ async function restartAntigravityApp() {
     await quitMacApp("Antigravity");
     await new Promise((resolve) => setTimeout(resolve, 700));
     const child = spawn("open", ["-a", executable], { detached: true, stdio: "ignore" });
+    child.unref();
+    return true;
+  }
+
+  if (process.platform === "linux") {
+    const executable = resolveAntigravityExecutable();
+    if (!executable) throw new Error("AGY 실행 파일을 찾지 못했습니다.");
+    spawnSync("pkill", ["-x", path.basename(executable)], {
+      stdio: "ignore",
+      timeout: 5000,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    const child = spawn(executable, [], { detached: true, stdio: "ignore" });
     child.unref();
     return true;
   }
@@ -1531,8 +1647,11 @@ function writeClaudeLoginScript() {
   const claudeCommand = resolveCommand("claude", claudeCommandCandidates());
   if (!claudeCommand) throw new Error("Claude 명령을 찾지 못했습니다.");
 
-  if (process.platform === "darwin") {
-    return writeMacLoginScript("codepet-claude-login.command", [
+  if (["darwin", "linux"].includes(process.platform)) {
+    const fileName = process.platform === "darwin"
+      ? "codepet-claude-login.command"
+      : "codepet-claude-login.sh";
+    return writeMacLoginScript(fileName, [
       'echo "CodePet Claude Login"',
       `${quoteShellArgument(claudeCommand)} auth login`,
     ]);
@@ -1604,7 +1723,7 @@ async function stopCodexDesktopApp() {
   }
 
   if (process.platform !== "win32") {
-    return { ok: true, skipped: true, stdout: "No Windows process stop needed." };
+    return { ok: true, skipped: true, stdout: "Codex Desktop restart is not available on Linux." };
   }
 
   const marker = quotePowerShellString(CODEX_DESKTOP_RESTART_CONFIG.windowsProcessPathMarker);
@@ -1646,12 +1765,11 @@ function launchCodexDesktopApp() {
   }
 
   if (process.platform !== "win32") {
-    const child = spawn("codex", ["app"], {
-      detached: true,
-      stdio: "ignore",
+    return Promise.resolve({
+      ok: true,
+      skipped: true,
+      stdout: "Codex Desktop restart is not available on Linux.",
     });
-    child.unref();
-    return Promise.resolve({ ok: true, skipped: false, stdout: "Launched codex app." });
   }
 
   return runHiddenPowerShell(
@@ -1876,6 +1994,10 @@ function buildTrayMenu() {
       label: "설정…",
       click: openSettingsWindow,
     },
+    {
+      label: "에이전트 채팅방…",
+      click: openChatWindow,
+    },
     { type: "separator" },
     {
       label: "CodePet 보이기",
@@ -2030,6 +2152,7 @@ function showContextMenu() {
 
   const template = [
     { label: "설정…", click: openSettingsWindow },
+    { label: "에이전트 채팅방…", click: openChatWindow },
     { type: "separator" },
     { label: "계정", submenu: buildProviderAccountSubmenu() },
     {
@@ -2827,7 +2950,7 @@ async function startProviderLogin(provider) {
       // 처음 로그인하는 PC라면 저장할 현재 계정이 없습니다.
     }
     const scriptPath = writeClaudeLoginScript();
-    const error = await shell.openPath(scriptPath);
+    const error = await openLoginScript(scriptPath);
     if (error) throw new Error(error);
     clearUsageCache("claude");
     return true;
@@ -3243,6 +3366,9 @@ function registerIpcHandlers() {
     if (Object.hasOwn(next, "fontFamily")) {
       patch.fontFamily = normalizeFontFamily(next.fontFamily, fonts);
     }
+    if (Object.hasOwn(next, "fontSize")) {
+      patch.fontSize = normalizeFontSize(next.fontSize);
+    }
     if (Object.hasOwn(next, "bubbleBgColor")) {
       patch.bubbleBgColor = typeof next.bubbleBgColor === "string" ? next.bubbleBgColor.trim() : "";
     }
@@ -3328,6 +3454,8 @@ function registerIpcHandlers() {
       settingsWindow.close();
     }
   });
+
+  chatFeature.registerIpcHandlers();
 }
 
 // 앱 수명주기 진입점입니다.
@@ -3347,6 +3475,9 @@ app.whenReady().then(() => {
   if (process.argv.includes("--settings")) {
     openSettingsWindow();
   }
+  if (process.argv.includes("--chat")) {
+    openChatWindow();
+  }
   // 사용량 풍선은 수동 호출이라 문제가 없지만, 대화 말풍선은 watcher가 시작되지 않으면 절대 뜨지 않습니다.
   // 그래서 말풍선 renderer 로드 여부와 무관하게 감시를 바로 시작하고, 표시 데이터는 showBubble()에서 큐잉합니다.
   codexWatcher.start();
@@ -3365,9 +3496,9 @@ app.whenReady().then(() => {
 app.on("before-quit", () => {
   isQuitting = true;
   teardownCodexProxyOnQuit();
+  chatFeature.shutdown();
 });
 
-// 타이머를 모두 정리하고 앱을 종료합니다.
 app.on("window-all-closed", () => {
   stopMovementLoop();
   clearTimeout(phaseTimer);
@@ -3388,6 +3519,7 @@ function getAppearancePayload() {
   const settings = readSettings();
   return {
     fontFamily: settings.fontFamily || "",
+    fontSize: normalizeFontSize(settings.fontSize),
     bubbleBgColor: settings.bubbleBgColor || "",
     bubbleTextColor: settings.bubbleTextColor || "",
   };
@@ -3403,6 +3535,10 @@ function sendAppearanceToWindows() {
   }
   if (settingsWindow && !settingsWindow.isDestroyed()) {
     settingsWindow.webContents.send("appearance:update", payload);
+  }
+  const chatWindow = chatFeature.getWindow();
+  if (chatWindow) {
+    chatWindow.webContents.send("appearance:update", payload);
   }
 }
 
@@ -3515,6 +3651,7 @@ async function getSettingsData({ forceUsage = false } = {}) {
   return {
     appearance: {
       fontFamily: settings.fontFamily || "",
+      fontSize: normalizeFontSize(settings.fontSize),
       bubbleBgColor: settings.bubbleBgColor || "",
       bubbleTextColor: settings.bubbleTextColor || "",
     },
@@ -3579,4 +3716,9 @@ function openSettingsWindow(section = "general") {
     settingsWindow = null;
   });
   settingsWindow.loadFile(path.join(__dirname, "settings.html"));
+}
+
+// 채팅 창 열기: 트레이/컨텍스트 메뉴에서 호출됩니다. 실제 구현은 chat/chat-window.js.
+function openChatWindow() {
+  chatFeature.openWindow();
 }

@@ -3,10 +3,13 @@ const rootElement = document.documentElement;
 const toastElement = document.querySelector("#toast");
 const fontSelect = document.querySelector("#font");
 const fontSearch = document.querySelector("#font-search");
+const fontSizeInput = document.querySelector("#font-size");
+const fontSizeValue = document.querySelector("#font-size-value");
 
 let state = null;
 let installedFonts = [];
 let selectedFont = "";
+let selectedFontSize = 12;
 let toastTimer = null;
 
 function $(selector) {
@@ -42,6 +45,13 @@ function applyAppearance(appearance, fontFamily = appearance?.fontFamily || "") 
   } else {
     rootElement.style.removeProperty("--user-font");
     rootElement.style.removeProperty("--font-display");
+  }
+
+  const fontSize = Number(appearance?.fontSize);
+  if (Number.isFinite(fontSize)) {
+    rootElement.style.setProperty("--preview-font-size", `${fontSize}px`);
+  } else {
+    rootElement.style.removeProperty("--preview-font-size");
   }
 
   if (appearance?.bubbleBgColor) {
@@ -120,7 +130,9 @@ function resolveInstalledFontFamily(fontFamily) {
 
 function updateFontPreview() {
   $("#font-preview-name").textContent = selectedFont || "시스템 기본";
-  applyAppearance(state?.appearance || {}, selectedFont);
+  fontSizeInput.value = String(selectedFontSize);
+  fontSizeValue.value = `${selectedFontSize}px`;
+  applyAppearance({ ...(state?.appearance || {}), fontSize: selectedFontSize }, selectedFont);
 }
 
 function renderFonts() {
@@ -149,7 +161,10 @@ function renderFonts() {
 
 function renderGeneral({ resetAppearance = false } = {}) {
   if (!state) return;
-  if (resetAppearance) selectedFont = resolveInstalledFontFamily(state.appearance.fontFamily);
+  if (resetAppearance) {
+    selectedFont = resolveInstalledFontFamily(state.appearance.fontFamily);
+    selectedFontSize = Number(state.appearance.fontSize) || 12;
+  }
   replaceOptions(
     $("#pet"),
     state.pets.map((pet) => new Option(pet.label, pet.key)),
@@ -408,12 +423,17 @@ function registerAppearanceControls() {
     selectedFont = fontSelect.value;
     updateFontPreview();
   });
+  fontSizeInput.addEventListener("input", () => {
+    selectedFontSize = Number(fontSizeInput.value) || 12;
+    updateFontPreview();
+  });
   $("#save").addEventListener("click", async (event) => {
     const button = event.currentTarget;
     setButtonBusy(button, true, "적용 중…");
     try {
       const response = await api.save({
         fontFamily: selectedFont || null,
+        fontSize: selectedFontSize,
         petKey: $("#pet").value,
         activityBubbleMode: $("#bubble-mode").value,
         followMouse: $("#follow").checked,
@@ -469,6 +489,11 @@ function registerProviderControls() {
 
 function registerAppearanceUpdates() {
   api.onAppearance((appearance) => {
+    if (Number.isFinite(Number(appearance?.fontSize))) {
+      selectedFontSize = Number(appearance.fontSize);
+      fontSizeInput.value = String(selectedFontSize);
+      fontSizeValue.value = `${selectedFontSize}px`;
+    }
     applyAppearance(appearance, appearance?.fontFamily || selectedFont);
     if (state) state.appearance = { ...state.appearance, ...appearance };
   });
@@ -567,6 +592,7 @@ async function initialize() {
     }
     state = settingsResponse.data;
     selectedFont = resolveInstalledFontFamily(state.appearance.fontFamily);
+    selectedFontSize = Number(state.appearance.fontSize) || 12;
     renderAll({ resetAppearance: true });
     applyAppearance(state.appearance, selectedFont);
   } catch (error) {

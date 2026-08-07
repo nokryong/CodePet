@@ -41,7 +41,7 @@ body {
   -webkit-backdrop-filter: blur(16px);
   color: var(--bubble-ink);
   cursor: pointer;
-  font-size: 12px;
+  font-size: var(--user-font-size, 12px);
   line-height: 1.5;
   scrollbar-width: none;
 }
@@ -69,7 +69,7 @@ body {
   gap: 6px;
   margin-bottom: 8px;
   font-family: var(--user-font, "Segoe UI Variable Display"), "Segoe UI", system-ui, sans-serif;
-  font-size: 12px;
+  font-size: 1em;
   font-weight: 700;
   letter-spacing: -0.01em;
   text-transform: uppercase;
@@ -123,7 +123,7 @@ body {
 .activity-row-label {
   overflow: hidden;
   color: var(--bubble-ink);
-  font-size: 11px;
+  font-size: 0.9167em;
   font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -135,7 +135,7 @@ body {
   margin-top: 3px;
   overflow: hidden;
   color: var(--bubble-ink);
-  font-size: 11px;
+  font-size: 0.9167em;
   line-height: 1.45;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
@@ -186,7 +186,7 @@ body {
 .footer {
   margin-top: 4px;
   color: var(--bubble-muted);
-  font-size: 10px;
+  font-size: 0.8333em;
 }
 
 .footer {
@@ -212,7 +212,7 @@ body {
   color: var(--bubble-ink);
   cursor: pointer;
   font: inherit;
-  font-size: 11px;
+  font-size: 0.9167em;
   font-weight: 700;
   line-height: 1.25;
   transition: all 120ms ease;

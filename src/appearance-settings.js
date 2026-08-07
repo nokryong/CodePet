@@ -9,4 +9,11 @@ function quoteFontFamily(font) {
   return font ? `"${font.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"` : null;
 }
 
-module.exports = { normalizeFontFamily, quoteFontFamily };
+function normalizeFontSize(value, fallback = 12) {
+  const size = Number(value);
+  return Number.isFinite(size) && size >= 10 && size <= 20
+    ? Math.round(size)
+    : fallback;
+}
+
+module.exports = { normalizeFontFamily, normalizeFontSize, quoteFontFamily };

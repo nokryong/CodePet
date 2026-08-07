@@ -77,6 +77,7 @@ foreach ($path in $paths) {
 let installedFontsPromise = null;
 
 let macInstalledFontsPromise = null;
+let linuxInstalledFontsPromise = null;
 
 function getInstalledFonts({ run = execFile, platform = process.platform } = {}) {
   if (platform === "darwin") {
@@ -91,6 +92,28 @@ function getInstalledFonts({ run = execFile, platform = process.platform } = {})
       }
     });
     return macInstalledFontsPromise;
+  }
+  if (platform === "linux") {
+    if (run === execFile && linuxInstalledFontsPromise) return linuxInstalledFontsPromise;
+    const promise = new Promise((resolve) => {
+      run(
+        "fc-list",
+        ["--format=%{family}\\n"],
+        { encoding: "utf8", timeout: 6000, maxBuffer: 4 * 1024 * 1024 },
+        (error, stdout) => {
+          if (error) {
+            resolve([]);
+            return;
+          }
+          const families = String(stdout || "")
+            .split(/\r?\n/)
+            .flatMap((line) => line.split(","));
+          resolve(normalizeFontNames(families));
+        }
+      );
+    });
+    if (run === execFile) linuxInstalledFontsPromise = promise;
+    return promise;
   }
   if (platform !== "win32") return Promise.resolve([]);
   if (run === execFile && installedFontsPromise) return installedFontsPromise;

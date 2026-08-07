@@ -15,6 +15,12 @@ window.bubbleApi.onAppearance((appearance) => {
     root.style.removeProperty("--user-font");
   }
 
+  if (Number.isFinite(Number(appearance?.fontSize))) {
+    root.style.setProperty("--user-font-size", `${Number(appearance.fontSize)}px`);
+  } else {
+    root.style.removeProperty("--user-font-size");
+  }
+
   if (appearance?.bubbleBgColor) {
     root.style.setProperty("--bubble-bg", appearance.bubbleBgColor);
   } else {

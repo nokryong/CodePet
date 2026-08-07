@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CodePet 채팅</title>
+    <link rel="stylesheet" href="./chat.css" />
+  </head>
+  <body>
+    <div class="titlebar">
+      <div class="titlebar-drag">
+        <span class="titlebar-logo"><i></i><i></i></span>
+        <span class="titlebar-title">CodePet 채팅</span>
+      </div>
+      <div class="titlebar-controls">
+        <button class="titlebar-btn btn-minimize" id="btn-minimize" type="button" aria-label="최소화">
+          <svg viewBox="0 0 10 10"><path d="M 1,5 L 9,5" /></svg>
+        </button>
+        <button class="titlebar-btn btn-maximize" id="btn-maximize" type="button" aria-label="최대화">
+          <svg class="icon-maximize" viewBox="0 0 10 10"><path d="M 2,2 L 8,2 L 8,8 L 2,8 Z" /></svg>
+          <svg class="icon-restore" viewBox="0 0 10 10" style="display: none;"><path d="M 2,4 L 6,4 L 6,8 L 2,8 Z M 4,4 L 4,2 L 8,2 L 8,6 L 6,6" /></svg>
+        </button>
+        <button class="titlebar-btn btn-close" id="btn-close" type="button" aria-label="닫기">
+          <svg viewBox="0 0 10 10"><path d="M 2,2 L 8,8 M 8,2 L 2,8" /></svg>
+        </button>
+      </div>
+    </div>
+
+    <div class="app">
+      <aside class="sidebar" id="sidebar">
+        <div class="sidebar-head">
+          <span class="sidebar-title">세션</span>
+          <button class="button button-small" id="btn-new-session" type="button">+ 새 채팅</button>
+        </div>
+        <ul class="session-list" id="session-list" aria-label="세션 목록"></ul>
+        <div class="sidebar-foot">
+          <button class="text-button" id="btn-doctor" type="button">환경 진단</button>
+          <button class="text-button" id="btn-refresh-providers" type="button" title="설치된 CLI를 다시 탐지합니다">CLI 다시 탐지</button>
+        </div>
+      </aside>
+      <div
+        class="sidebar-resizer"
+        id="sidebar-resizer"
+        role="separator"
+        aria-label="세션 사이드바 너비 조절"
+        aria-orientation="vertical"
+        tabindex="0"
+      >
+        <button
+          class="sidebar-toggle"
+          id="sidebar-toggle"
+          type="button"
+          aria-label="세션 사이드바 접기"
+          aria-expanded="true"
+          title="사이드바 접기"
+        >‹</button>
+      </div>
+
+      <div class="chat-main">
+        <header class="room-bar">
+          <div class="room-info">
+            <strong id="session-title" title="더블클릭하면 이름을 바꿀 수 있어요">세션</strong>
+            <div class="room-controls">
+              <button class="chip-button" id="btn-workspace" type="button" title="세션 워크스페이스 폴더">
+                <span class="chip-icon">📁</span><span id="workspace-label">워크스페이스 없음</span>
+              </button>
+              <select id="permission-select" aria-label="권한 모드">
+                <option value="chat">대화만 (도구 없음)</option>
+                <option value="workspace-read">워크스페이스 읽기</option>
+                <option value="workspace-write">워크스페이스 쓰기</option>
+              </select>
+              <span class="enforcement-hint" id="enforcement-hint"></span>
+              <button class="chip-button" id="btn-discussion" type="button" title="에이전트 토론 시작">💬 토론</button>
+            </div>
+          </div>
+          <div class="room-actions">
+            <div class="agent-chips" id="agent-chips" aria-label="참가자"></div>
+          </div>
+        </header>
+
+        <div class="store-warning" id="store-warning" hidden></div>
+
+        <main class="chat-scroll" id="chat-scroll">
+          <ol class="message-list" id="message-list" aria-live="polite"></ol>
+          <div class="typing-row" id="typing-row" hidden></div>
+        </main>
+
+        <footer class="composer">
+          <div class="mention-popup" id="mention-popup" role="listbox" hidden></div>
+          <div class="attachment-row" id="attachment-row" hidden></div>
+          <div class="composer-box" id="composer-box">
+            <button class="icon-button" id="btn-attach" type="button" title="파일 첨부 (이미지·문서, 최대 20MiB)">＋</button>
+            <textarea
+              id="composer-input"
+              rows="1"
+              placeholder="참여 중인 에이전트에게 메시지…  (@로 대상 지정 · Enter 전송)"
+              autocomplete="off"
+            ></textarea>
+            <button class="button button-danger" id="btn-stop" type="button" hidden>중지</button>
+            <button class="button button-primary" id="btn-send" type="button">전송</button>
+          </div>
+        </footer>
+      </div>
+    </div>
+
+    <div class="popover-backdrop" id="popover-backdrop" hidden></div>
+    <div class="popover" id="popover" hidden></div>
+    <div class="doctor-backdrop" id="doctor-backdrop" hidden>
+      <section class="doctor-dialog" role="dialog" aria-modal="true" aria-labelledby="doctor-title">
+        <div class="doctor-head">
+          <div>
+            <p class="doctor-eyebrow">CODEPET DOCTOR</p>
+            <h2 id="doctor-title">에이전트 환경 진단</h2>
+            <p id="doctor-summary">설치와 로그인 상태를 확인하고 있어요.</p>
+          </div>
+          <button class="icon-button doctor-close" id="doctor-close" type="button" aria-label="환경 진단 닫기">×</button>
+        </div>
+        <div class="doctor-list" id="doctor-list" aria-live="polite"></div>
+        <div class="doctor-actions">
+          <button class="button" id="doctor-refresh" type="button">다시 진단</button>
+          <button class="button button-primary" id="doctor-done" type="button">확인</button>
+        </div>
+      </section>
+    </div>
+    <div class="approval-backdrop" id="approval-backdrop" hidden>
+      <section class="approval-dialog" role="dialog" aria-modal="true" aria-labelledby="approval-title">
+        <h2 id="approval-title">도구 실행 권한 요청</h2>
+        <p id="approval-summary"></p>
+        <pre id="approval-detail"></pre>
+        <p class="approval-warning">현재 CLI headless 실행에서는 개별 명령만 승인할 수 없어, 승인하면 이 턴 전체를 자동 승인 모드로 다시 실행합니다.</p>
+        <div class="approval-actions">
+          <button class="button" id="approval-deny" type="button">거부</button>
+          <button class="button button-primary" id="approval-approve" type="button">이 턴 승인 후 다시 실행</button>
+        </div>
+      </section>
+    </div>
+
+    <script src="./chat-markdown.js"></script>
+    <script src="./chat.js"></script>
+  </body>
+</html>
