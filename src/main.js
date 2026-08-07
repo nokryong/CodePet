@@ -34,6 +34,11 @@ const { normalizeFontFamily, normalizeFontSize } = require("./appearance-setting
 const { buildAccountSubmenu } = require("./account-submenu");
 const { rateWindowLabel } = require("./codex-usage-label");
 const { mergeUsageBubbleData } = require("./usage-bubble-merge");
+const {
+  USAGE_BUBBLE_PROVIDERS,
+  normalizeUsageBubbleProviders,
+  toggleUsageBubbleProvider,
+} = require("./usage-bubble-providers");
 const { commandNeedsShell, selectCommandPath } = require("./command-resolution");
 const { createChatFeature } = require("./chat/chat-ipc");
 const { buildWindowsCodexLaunchScript } = require("./codex-desktop-launch");
@@ -280,6 +285,30 @@ function setActivityBubbleMode(mode) {
   }
 }
 
+function getUsageBubbleProviders() {
+  return normalizeUsageBubbleProviders(readSettings().usageBubbleProviders);
+}
+
+function setUsageBubbleProviders(ids) {
+  writeSettings({ usageBubbleProviders: normalizeUsageBubbleProviders(ids) });
+  refreshTrayMenu();
+}
+
+// 트레이 우클릭 메뉴에서 표시할 provider를 바로 켜고 끕니다.
+function buildUsageBubbleProviderSubmenu() {
+  const selected = getUsageBubbleProviders();
+  return USAGE_BUBBLE_PROVIDERS.map((provider) => ({
+    label: provider.label,
+    type: "checkbox",
+    checked: selected.includes(provider.id),
+    click: (item) => {
+      setUsageBubbleProviders(
+        toggleUsageBubbleProvider(selected, provider.id, item.checked)
+      );
+    },
+  }));
+}
+
 function buildActivityBubbleModeSubmenu() {
   const currentMode = getActivityBubbleMode();
   return [
@@ -441,10 +470,11 @@ function applyPet(petKey) {
 
 // 말풍선 창 관련 설정입니다. 너비는 고정하고 높이는 내용에 맞춰 renderer가 보고합니다.
 const BUBBLE_CONFIG = Object.freeze({
-  width: 270,
+  // provider 세 곳의 한도를 한 말풍선에 담습니다. 320px면 한도 이름이 한 줄에 들어가고,
+  // 게이지가 10줄까지 늘어나도 스크롤 없이 보이도록 최대 높이를 잡았습니다.
+  width: 320,
   minHeight: 48,
-  // provider 세 곳의 한도를 한 말풍선에 담으므로 게이지가 최대 10줄까지 늘어납니다.
-  maxHeight: 500,
+  maxHeight: 660,
   gapPx: 2,
   renderFallbackMs: 350,
   loadTimeoutMs: 2500,
@@ -2023,6 +2053,10 @@ function buildTrayMenu() {
       label: "펫 바꾸기",
       submenu: buildPetSelectionSubmenu(),
     },
+    {
+      label: "사용량 표시 항목",
+      submenu: buildUsageBubbleProviderSubmenu(),
+    },
     { type: "separator" },
     {
       label: runtime.manualPaused ? "이동 다시 시작" : "이동 일시 정지",
@@ -2335,6 +2369,8 @@ function positionBubble() {
   if (y < area.y) {
     y = Math.round(runtime.y + runtime.height + BUBBLE_CONFIG.gapPx);
   }
+  // 말풍선이 길어지면 펫 아래로 내려갔을 때 화면 밖으로 나갈 수 있어 작업 영역 안으로 되돌립니다.
+  y = Math.max(area.y, Math.min(y, area.y + area.height - bubbleHeight));
 
   bubbleWindow.setBounds({ x, y, width: BUBBLE_CONFIG.width, height: bubbleHeight });
 }
@@ -2650,18 +2686,25 @@ async function fetchAntigravityUsageForBubble() {
 // 더블클릭 시 호출됩니다. 로그/세션 캐시는 쓰지 않고 현재 live auth로 즉시 조회합니다.
 // Codex · Claude · AGY를 함께 조회해서 한 말풍선에 세 provider의 한도를 모두 보여줍니다.
 async function showUsageBubble() {
+  const selected = getUsageBubbleProviders();
+  const selectedLabels = USAGE_BUBBLE_PROVIDERS.filter((provider) => selected.includes(provider.id))
+    .map((provider) => provider.label)
+    .join(" · ");
+
   showBubble({
     kind: "activity",
     title: "사용량",
     busy: true,
-    text: "현재 선택된 Codex · Claude · AGY 프로필의 사용량을 조회하는 중입니다.",
+    text: `현재 선택된 ${selectedLabels} 프로필의 사용량을 조회하는 중입니다.`,
     actions: [],
   });
 
+  // 선택하지 않은 provider는 조회 자체를 건너뜁니다.
+  const request = (id, load) => (selected.includes(id) ? load() : Promise.resolve(null));
   const [codexResult, claudeResult, agyResult] = await Promise.allSettled([
-    codexAccountSwitcher.fetchCurrentUsage(),
-    fetchClaudeUsage({ credentialStore: claudeLiveStore }),
-    fetchAntigravityUsageForBubble(),
+    request("codex", () => codexAccountSwitcher.fetchCurrentUsage()),
+    request("claude", () => fetchClaudeUsage({ credentialStore: claudeLiveStore })),
+    request("agy", () => fetchAntigravityUsageForBubble()),
   ]);
 
   const codexUsage = codexResult.status === "fulfilled" ? codexResult.value : null;
@@ -2669,31 +2712,36 @@ async function showUsageBubble() {
   const agyUsage = agyResult.status === "fulfilled" ? agyResult.value : null;
   const codexData = codexUsage ? buildUsageBubbleData(codexUsage) : null;
 
+  const providers = [
+    {
+      id: "codex",
+      name: "Codex",
+      gauges: codexData?.gauges,
+      footer: codexData?.footer,
+      error: usageErrorText(codexResult.reason),
+    },
+    {
+      id: "claude",
+      name: "Claude",
+      gauges: claudeUsage?.gauges,
+      account: currentClaudeAccountSummary(),
+      error: usageErrorText(claudeResult.reason),
+      formatResetText: true,
+    },
+    {
+      id: "agy",
+      name: "AGY",
+      gauges: agyUsage?.gauges,
+      account: agyUsage ? { plan: agyUsage.plan, label: agyUsage.email } : null,
+      error: usageErrorText(agyResult.reason),
+      formatResetText: true,
+      compactLabel: true,
+    },
+  ];
+
   showBubble(
     mergeUsageBubbleData({
-      providers: [
-        {
-          name: "Codex",
-          gauges: codexData?.gauges,
-          footer: codexData?.footer,
-          error: usageErrorText(codexResult.reason),
-        },
-        {
-          name: "Claude",
-          gauges: claudeUsage?.gauges,
-          account: currentClaudeAccountSummary(),
-          error: usageErrorText(claudeResult.reason),
-          formatResetText: true,
-        },
-        {
-          name: "AGY",
-          gauges: agyUsage?.gauges,
-          account: agyUsage ? { plan: agyUsage.plan, label: agyUsage.email } : null,
-          error: usageErrorText(agyResult.reason),
-          formatResetText: true,
-          compactLabel: true,
-        },
-      ],
+      providers: providers.filter((provider) => selected.includes(provider.id)),
       formatReset: formatResetInfo,
     })
   );
@@ -3431,6 +3479,9 @@ function registerIpcHandlers() {
     if (Object.values(ACTIVITY_BUBBLE_MODES).includes(next.activityBubbleMode)) {
       setActivityBubbleMode(next.activityBubbleMode);
     }
+    if (Array.isArray(next.usageBubbleProviders)) {
+      setUsageBubbleProviders(next.usageBubbleProviders);
+    }
     if (typeof next.followMouse === "boolean" && next.followMouse !== runtime.followMouse) {
       toggleFollowMouse();
     }
@@ -3705,6 +3756,8 @@ async function getSettingsData({ forceUsage = false } = {}) {
     pets: pets.map((pet) => ({ key: pet.key, label: pet.label })),
     petKey: resolveSelectedPet()?.key || "",
     activityBubbleMode: settings.activityBubbleMode || "full",
+    usageBubbleProviderOptions: USAGE_BUBBLE_PROVIDERS.map((provider) => ({ ...provider })),
+    usageBubbleProviders: getUsageBubbleProviders(),
     followMouse: runtime.followMouse,
     autoStart: isAutoLaunchEnabled(),
     providers: [

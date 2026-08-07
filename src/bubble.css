@@ -31,7 +31,7 @@ body {
 .bubble {
   box-sizing: border-box;
   width: calc(100% - 10px);
-  max-height: 491px;
+  max-height: 651px;
   overflow-y: auto;
   padding: 12px 14px;
   border: 1.5px solid var(--bubble-border);

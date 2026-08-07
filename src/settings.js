@@ -344,9 +344,48 @@ function renderUsage() {
   }
 }
 
+// 펫 말풍선에 띄울 provider 선택입니다. 트레이 메뉴와 같은 설정을 공유합니다.
+function renderUsageBubbleProviders() {
+  const root = $("#usage-bubble-providers");
+  root.replaceChildren();
+  const selected = state?.usageBubbleProviders || [];
+
+  for (const provider of state?.usageBubbleProviderOptions || []) {
+    const row = createElement("label", "switch-row");
+    row.htmlFor = `usage-bubble-${provider.id}`;
+    const name = createElement("span");
+    name.appendChild(createElement("strong", "", provider.label));
+    const input = createElement("input");
+    input.id = `usage-bubble-${provider.id}`;
+    input.type = "checkbox";
+    input.checked = selected.includes(provider.id);
+    input.addEventListener("change", () => saveUsageBubbleProviders());
+    const knob = createElement("i");
+    knob.setAttribute("aria-hidden", "true");
+    row.append(name, input, knob);
+    root.appendChild(row);
+  }
+}
+
+async function saveUsageBubbleProviders() {
+  const chosen = (state?.usageBubbleProviderOptions || [])
+    .filter((provider) => $(`#usage-bubble-${provider.id}`)?.checked)
+    .map((provider) => provider.id);
+  try {
+    const response = await api.save({ usageBubbleProviders: chosen });
+    if (!response?.ok) throw new Error(responseError(response, "설정을 적용하지 못했습니다."));
+    state = response.data;
+  } catch (error) {
+    showError(error.message || String(error));
+  }
+  // 마지막 하나를 끄려 한 경우처럼 main이 값을 되돌렸을 수 있어 저장된 값으로 다시 그립니다.
+  renderUsageBubbleProviders();
+}
+
 function renderAll(options = {}) {
   renderGeneral(options);
   renderAccounts();
+  renderUsageBubbleProviders();
   renderUsage();
 }
 
@@ -478,6 +517,8 @@ function registerProviderControls() {
       if (!response?.ok) throw new Error(responseError(response, "사용량을 확인하지 못했습니다."));
       state = response.data;
       renderAccounts();
+      // 트레이 메뉴에서 표시 항목을 바꿨을 수 있으므로 함께 다시 그립니다.
+      renderUsageBubbleProviders();
       renderUsage();
     } catch (error) {
       showError(error.message || String(error));
