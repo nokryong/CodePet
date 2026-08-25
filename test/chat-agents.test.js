@@ -41,3 +41,32 @@ test("AGY 모델명에 포함된 추론 강도를 실제 effort로 맞춘다", (
   assert.equal(agent.model, "gemini-3.6-flash-high");
   assert.equal(agent.effort, "high");
 });
+
+test("실행 어댑터가 아직 없는 provider는 채팅에서 사용 가능으로 노출하지 않는다", () => {
+  const pending = record("grok", [
+    { id: "default", efforts: ["default", "medium", "high"] },
+    { id: "grok-4.5", efforts: ["default", "medium", "high"] },
+  ]);
+  pending.permissions = { chat: { supported: false, enforcement: "sandbox" } };
+  const agent = roomAgentFromCapability(pending, {});
+  assert.equal(agent.available, false);
+  assert.match(agent.reason, /통합/);
+});
+
+test("grok is unavailable outside chat permission mode", () => {
+  const grok = record("grok", [{ id: "grok-4.5", efforts: ["medium"] }]);
+  grok.permissions = { chat: { supported: true, enforcement: "tool-policy" }, "workspace-read": { supported: false, enforcement: "unavailable" } };
+  assert.equal(roomAgentFromCapability(grok, {}, "chat").available, true);
+  assert.equal(roomAgentFromCapability(grok, {}, "workspace-read").available, false);
+});
+
+test("Grok 승인형 쓰기는 저장된 자동 승인 설정을 무시한다", () => {
+  const grok = record("grok", [{ id: "grok-4.5", efforts: ["medium"] }]);
+  grok.permissions = {
+    chat: { supported: true, enforcement: "tool-policy" },
+    "workspace-write": { supported: true, enforcement: "container-copy-approval" },
+  };
+  const agent = roomAgentFromCapability(grok, { autoApprove: true }, "workspace-write");
+  assert.equal(agent.available, true);
+  assert.equal(agent.autoApprove, false);
+});

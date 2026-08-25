@@ -19,6 +19,7 @@ function provider(id, overrides = {}) {
       "workspace-read": { supported: true, enforcement: "sandbox" },
       "workspace-write": { supported: true, enforcement: "sandbox" },
     },
+    grok: { chat: { supported: true, enforcement: "tool-policy" }, "workspace-read": { supported: false, enforcement: "unavailable" }, "workspace-write": { supported: false, enforcement: "unavailable" } },
     agy: {
       chat: { supported: true, enforcement: "sandbox" },
       "workspace-read": { supported: true, enforcement: "sandbox" },
@@ -133,6 +134,9 @@ test("어떤 조합에서도 위험 플래그는 생성되지 않는다", () => 
       }
     }
   }
+  const grok = build("grok", { model: "grok-4.5", effort: "high" });
+  assert.equal(grok.ok, true);
+  assert.ok(!grok.argv.some((arg) => /dangerously|bypass|full-access|full-auto/i.test(arg)));
   assert.throws(() => assertSafeArgv(["--dangerously-bypass-approvals-and-sandbox"]));
 });
 
@@ -265,4 +269,83 @@ test("인라인 한도보다 큰 텍스트는 인라인되지 않는다", () => 
   };
   const result = build("claude", { attachments: [bigText] });
   assert.equal(result.deliveries[0].method, "unsupported");
+});
+
+test("grok chat uses prompt-file and verified safe policy", () => {
+  const result = build("grok", { model: "grok-4.5", effort: "high" });
+  assert.equal(result.ok, true);
+  assert.equal(result.promptTransport, "file");
+  assert.equal(result.promptFileFlag, "--prompt-file");
+  assert.equal(result.stdinPrompt, false);
+  for (const flag of ["--output-format", "streaming-messages-json", "--include-partial-messages", "--tools", "todo_write", "--disallowed-tools", "search_tool,use_tool", "--disable-web-search", "--no-subagents", "--no-memory", "--permission-mode", "dontAsk", "--sandbox", "read-only", "--verbatim"]) assert.ok(result.argv.includes(flag));
+  assert.equal(result.argv[result.argv.indexOf("--model") + 1], "grok-4.5");
+  assert.equal(result.argv[result.argv.indexOf("--effort") + 1], "high");
+  assert.equal(build("grok", { permissionMode: "workspace-read", workspace: WORKSPACE }).ok, false);
+
+  const smallText = { id: "t", mime: "text/plain", size: 5, kind: "text" };
+  const image = { id: "i", mime: "image/png", size: 5, kind: "image" };
+  const largeText = { id: "l", mime: "text/plain", size: INLINE_TEXT_LIMIT + 1, kind: "text" };
+  assert.deepEqual(
+    build("grok", { attachments: [smallText, image, largeText] }).deliveries.map((item) => item.method),
+    ["inline", "unsupported", "unsupported"]
+  );
+});
+
+test("grok workspace-read는 Docker stdin 경로와 읽기 전용 이중 정책만 만든다", () => {
+  const grok = provider("grok", {
+    permissions: {
+      chat: { supported: true, enforcement: "tool-policy" },
+      "workspace-read": { supported: true, enforcement: "container" },
+      "workspace-write": { supported: false, enforcement: "unavailable" },
+    },
+  });
+  const result = buildAgentInvocation({
+    provider: grok,
+    permissionMode: "workspace-read",
+    workspace: WORKSPACE,
+    chatCwd: CHAT_CWD,
+    model: "grok-4.5",
+    effort: "high",
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.promptTransport, "stdin");
+  assert.equal(result.promptFileFlag, null);
+  assert.equal(result.enforcement, "container");
+  assert.equal(result.argv[result.argv.indexOf("--cwd") + 1], "/workspace");
+  assert.equal(result.argv[result.argv.indexOf("--sandbox") + 1], "read-only");
+  for (const rule of ["Read", "Grep", "Edit", "Bash", "WebFetch", "WebSearch"]) {
+    assert.ok(result.argv.includes(rule), rule);
+  }
+  assert.equal(buildAgentInvocation({
+    provider: grok,
+    permissionMode: "workspace-write",
+    workspace: WORKSPACE,
+    chatCwd: CHAT_CWD,
+  }).ok, false);
+});
+
+test("grok workspace-write는 전용 편집 도구만 열고 Bash와 인증 경로를 차단한다", () => {
+  const grok = provider("grok", {
+    permissions: {
+      chat: { supported: true, enforcement: "tool-policy" },
+      "workspace-read": { supported: true, enforcement: "container" },
+      "workspace-write": { supported: true, enforcement: "container-copy-approval" },
+    },
+  });
+  const result = buildAgentInvocation({
+    provider: grok,
+    permissionMode: "workspace-write",
+    workspace: WORKSPACE,
+    chatCwd: CHAT_CWD,
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.promptTransport, "stdin");
+  assert.equal(result.enforcement, "container-copy-approval");
+  assert.equal(result.argv[result.argv.indexOf("--cwd") + 1], "/workspace");
+  assert.equal(result.argv[result.argv.indexOf("--sandbox") + 1], "workspace");
+  assert.match(result.argv[result.argv.indexOf("--tools") + 1], /write_file/);
+  assert.doesNotMatch(result.argv[result.argv.indexOf("--tools") + 1], /bash/i);
+  for (const denied of ["Bash", "Read(/home/node/.grok/**)", "Grep(/home/node/.grok/**)", "Edit(/home/node/.grok/**)"]) {
+    assert.ok(result.argv.includes(denied), denied);
+  }
 });

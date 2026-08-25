@@ -1,5 +1,6 @@
 // 프로바이더별 실행 인자를 만드는 순수 모듈입니다.
-// - 사용자 프롬프트는 절대 argv에 싣지 않습니다(항상 stdin).
+// - 사용자 프롬프트는 stdin 또는 임시 파일로 전달합니다. argv 전달은 stdin을
+//   지원하지 않는 AGY의 호환 경로에서만 길이를 제한해 사용합니다.
 // - 위험 플래그는 사용자가 에이전트별 자동 승인을 명시한 workspace-write에서만 허용합니다.
 // - 모델/노력 문자열은 허용 문자만 통과시켜 .cmd 셸 경유 시 주입을 차단합니다.
 
@@ -120,6 +121,109 @@ function agyArgv({ permissionMode, workspace, model, effort, attachmentsDir, has
   return argv;
 }
 
+function grokArgv({ permissionMode, model, effort }) {
+  if (!['chat', 'workspace-read', 'workspace-write'].includes(permissionMode)) return null;
+  const argv = [
+    "--output-format",
+    "streaming-messages-json",
+    "--include-partial-messages",
+    "--disable-web-search",
+    "--no-subagents",
+    "--no-memory",
+  ];
+  if (permissionMode === "chat") {
+    argv.push(
+      "--tools",
+      "todo_write",
+      "--disallowed-tools",
+      "search_tool,use_tool",
+      "--permission-mode",
+      "dontAsk",
+      // Unix 계열에서는 추가 방어층입니다. Windows 1.0.0에서는 실제 쓰기
+      // 경계가 아니므로 capability에는 tool-policy로 정확히 표시합니다.
+      "--sandbox",
+      "read-only"
+    );
+  } else if (permissionMode === "workspace-read") {
+    // Windows 호스트 경계는 Docker의 단일 :ro 마운트가 강제합니다. Grok
+    // 내부에서도 /workspace 아래 읽기 도구만 남기고 인증 볼륨 경로는 명시적으로
+    // 거부해, 모델 도구가 컨테이너 자격 증명을 열지 못하게 방어층을 더 둡니다.
+    argv.push(
+      "--tools",
+      "read_file,grep,list_dir",
+      "--disallowed-tools",
+      "search_tool,use_tool",
+      "--permission-mode",
+      "dontAsk",
+      "--allow",
+      "Read",
+      "--allow",
+      "Grep",
+      "--deny",
+      "Edit",
+      "--deny",
+      "Bash",
+      "--deny",
+      "Read(/home/node/.grok/**)",
+      "--deny",
+      "Grep(/home/node/.grok/**)",
+      "--deny",
+      "MCPTool(*)",
+      "--deny",
+      "WebFetch",
+      "--deny",
+      "WebSearch",
+      "--sandbox",
+      "read-only",
+      "--cwd",
+      "/workspace"
+    );
+  } else {
+    // Writes occur only in the container copy. CodePet captures a bounded
+    // manifest afterward and the main process, not Grok, applies approval.
+    // Bash is deliberately absent: a shell could read the mounted login
+    // volume directly and bypass Grok's Read deny rule. Edits stay useful via
+    // the dedicated write/edit tools without exposing credentials.
+    argv.push(
+      "--tools",
+      "read_file,grep,list_dir,write_file,edit_file",
+      "--disallowed-tools",
+      "search_tool,use_tool",
+      "--permission-mode",
+      "dontAsk",
+      "--allow",
+      "Read",
+      "--allow",
+      "Edit",
+      "--deny",
+      "Bash",
+      "--deny",
+      "Read(/home/node/.grok/**)",
+      "--deny",
+      "Grep(/home/node/.grok/**)",
+      "--deny",
+      "Edit(/home/node/.grok/**)",
+      "--deny",
+      "MCPTool(*)",
+      "--deny",
+      "WebFetch",
+      "--deny",
+      "WebSearch",
+      "--sandbox",
+      // Grok Linux 1.0.0 names its built-in writable profile "workspace".
+      // "workspace-write" is the CodePet permission-mode name, not a Grok
+      // sandbox profile, and Linux correctly refuses that unknown profile.
+      "workspace",
+      "--cwd",
+      "/workspace"
+    );
+  }
+  argv.push("--verbatim");
+  if (model) argv.push("--model", model);
+  if (effort) argv.push("--effort", effort);
+  return argv;
+}
+
 function buildDeliveries({ providerId, permissionMode, attachments }) {
   return attachments.map((attachment) => {
     const kind = attachmentKind(attachment);
@@ -146,6 +250,10 @@ function buildDeliveries({ providerId, permissionMode, attachments }) {
         return { id: attachment.id, method: "unsupported" };
       }
       return { id: attachment.id, method: "path" };
+    }
+    if (providerId === "grok") {
+      if (canInline(attachment)) return { id: attachment.id, method: "inline" };
+      return { id: attachment.id, method: "unsupported" };
     }
     // 그 외 확인되지 않은 CLI: 작은 텍스트 인라인 외에는 전달 불가로 배지 처리합니다.
     if (canInline(attachment)) return { id: attachment.id, method: "inline" };
@@ -238,17 +346,25 @@ function buildAgentInvocation(input = {}) {
       hasPathDeliveries,
       autoApprove,
     });
+  } else if (provider.id === "grok") {
+    argv = grokArgv({ permissionMode, model: normalizedModel, effort: normalizedEffort });
   } else {
-    // 알 수 없는 프로바이더: 플래그 없이 stdin 대화만 시도합니다.
-    argv = [];
+    return { ok: false, error: `지원하지 않는 채팅 provider: ${provider.id}` };
   }
+
+  if (!argv) return { ok: false, error: `${provider.name}는 "${permissionMode}" 권한 모드를 지원하지 않습니다.` };
 
   return {
     ok: true,
     argv: assertSafeArgv(argv, { autoApprove }),
     cwd,
-    stdinPrompt: provider.id !== "agy",
-    promptTransport: provider.id === "agy" ? "argv" : "stdin",
+    stdinPrompt: provider.id !== "agy" && (provider.id !== "grok" || permissionMode === "workspace-read"),
+    promptTransport: provider.id === "agy"
+      ? "argv"
+      : provider.id === "grok" && permissionMode === "chat"
+        ? "file"
+        : "stdin",
+    promptFileFlag: provider.id === "grok" && permissionMode === "chat" ? "--prompt-file" : null,
     deliveries,
     enforcement: permissionInfo.enforcement,
   };
@@ -261,4 +377,5 @@ module.exports = {
   assertSafeArgv,
   normalizeChoice,
   attachmentKind,
+  grokArgv,
 };

@@ -18,10 +18,15 @@ const ciWorkflow = fs.readFileSync(
 test("release packaging defines one native package for Windows, Linux, and macOS", () => {
   assert.deepEqual(packageJson.build.win.target, ["portable"]);
   assert.deepEqual(packageJson.build.linux.target, ["AppImage"]);
-  assert.deepEqual(packageJson.build.mac.target, ["dmg"]);
+  assert.deepEqual(packageJson.build.mac.target, [
+    { target: "dmg", arch: ["universal"] },
+  ]);
   assert.equal(packageJson.build.portable.artifactName, "CodePet-${version}.exe");
   assert.equal(packageJson.build.linux.artifactName, "CodePet-${version}-linux-${arch}.${ext}");
-  assert.equal(packageJson.build.mac.artifactName, "CodePet-${version}-mac.${ext}");
+  assert.equal(
+    packageJson.build.mac.artifactName,
+    "CodePet-${version}-mac-universal.${ext}"
+  );
   assert.equal(packageJson.desktopName, "CodePet.desktop");
   assert.equal(packageJson.build.linux.syncDesktopName, true);
 });
@@ -33,14 +38,21 @@ test("build script selects Linux on Linux and accepts an explicit Linux target",
 });
 
 test("release workflow builds three native runners and uploads all three packages", () => {
+  assert.match(releaseWorkflow, /push:[\s\S]*branches:[\s\S]*- main/);
   assert.match(releaseWorkflow, /windows-latest[\s\S]*artifacts\/\*\.exe/);
   assert.match(releaseWorkflow, /ubuntu-latest[\s\S]*artifacts\/\*\.AppImage/);
   assert.match(releaseWorkflow, /macos-latest[\s\S]*artifacts\/\*\.dmg/);
+  assert.match(releaseWorkflow, /actions\/upload-artifact@v4/);
+  assert.match(releaseWorkflow, /actions\/download-artifact@v4/);
+  assert.match(releaseWorkflow, /CodePet-\$\{\{ github\.sha \}\}-all-platforms/);
+  assert.match(releaseWorkflow, /sha256sum CodePet-\*\.exe CodePet-\*\.AppImage CodePet-\*\.dmg/);
   assert.match(releaseWorkflow, /gh release upload/);
   assert.match(releaseWorkflow, /gh release create[^\n]+--draft/);
   assert.match(releaseWorkflow, /gh release edit[^\n]+--draft=false/);
-  assert.doesNotMatch(releaseWorkflow, /actions\/(?:upload|download)-artifact/);
+  assert.match(releaseWorkflow, /chown root:root artifacts\/linux-unpacked\/chrome-sandbox/);
+  assert.match(releaseWorkflow, /chmod 4755 artifacts\/linux-unpacked\/chrome-sandbox/);
   assert.match(releaseWorkflow, /xvfb-run -a artifacts\/linux-unpacked\/code-pet/);
+  assert.doesNotMatch(releaseWorkflow, /--no-sandbox/);
 });
 
 test("CI는 모든 push와 pull request에서 세 OS 테스트를 실행한다", () => {

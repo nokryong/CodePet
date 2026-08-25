@@ -28,16 +28,46 @@ test("전역 실행 도우미(bin)가 선언되어 있고 존재한다", () => {
   assert.doesNotMatch(launcher, /auth|token|credential/i);
 });
 
-test("npm 팩 대상(files)에 src와 bin이 포함된다", () => {
-  assert.ok(packageJson.files.some((entry) => entry.startsWith("src")));
-  assert.ok(packageJson.files.some((entry) => entry.startsWith("bin")));
+test("npm 팩 대상은 실행 파일 형식과 CLI 진입점만 허용한다", () => {
+  assert.deepEqual(packageJson.files, [
+    "src/**/*.js",
+    "src/**/*.html",
+    "src/**/*.css",
+    "src/**/*.json",
+    "src/**/*.png",
+    "src/**/*.webp",
+    "src/docker/grok/Dockerfile",
+    "src/docker/grok/codepet-grok-*",
+    "bin/code-pet.js",
+    "build/icon.ico",
+    "build/icon.png",
+  ]);
+  assert.doesNotMatch(packageJson.files.join("\n"), /test|README|\.github|scripts/);
 });
 
 test("electron-builder 설정이 유지된다 (portable/dmg/AppImage)", () => {
   assert.deepEqual(packageJson.build.win.target, ["portable"]);
-  assert.deepEqual(packageJson.build.mac.target, ["dmg"]);
+  assert.deepEqual(packageJson.build.mac.target, [
+    { target: "dmg", arch: ["universal"] },
+  ]);
   assert.deepEqual(packageJson.build.linux.target, ["AppImage"]);
-  assert.ok(packageJson.build.files.includes("src/**/*"));
+  assert.ok(packageJson.build.files.includes("src/**/*.js"));
+  assert.ok(packageJson.build.files.includes("src/**/*.png"));
+  assert.ok(packageJson.build.files.includes("!node_modules{,/**/*}"));
+  assert.doesNotMatch(packageJson.build.files.join("\n"), /test|README|\.github|scripts/);
+});
+
+test("참조되지 않는 구형 미리보기 자산은 저장소에 없다", () => {
+  for (const relativePath of [
+    "build/icon-preview.png",
+    "src/chat-icon/gpt_01.png",
+    "src/chat-icon/claude_01.png",
+    "src/chat-icon/gemini_01.png",
+    "src/chat-icon/grok_01.png",
+    "src/chat-icon/emoticons/README.md",
+  ]) {
+    assert.equal(fs.existsSync(path.join(ROOT, relativePath)), false, relativePath);
+  }
 });
 
 test("README가 .code-pet 저장소·권한·첨부·AGY 구분을 문서화한다", () => {
@@ -47,7 +77,8 @@ test("README가 .code-pet 저장소·권한·첨부·AGY 구분을 문서화한�
   assert.match(readme, /워크스페이스와 권한/);
   assert.match(readme, /첨부 파일/);
   assert.match(readme, /IDE와 `agy` CLI는 별개/);
-  assert.match(readme, /자격 증명은 저장하지 않습니다/);
+  assert.match(readme, /채팅 저장소에는 CLI 로그인 토큰\/자격 증명을 기록하지 않습니다/);
+  assert.match(readme, /~\/\.codepet\/\*-switch/);
 });
 
 test("위험 우회 플래그는 명시적 자동 승인 경로에만 있다", () => {

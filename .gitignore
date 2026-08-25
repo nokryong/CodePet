@@ -1,5 +1,39 @@
-/node_modules
+# Dependencies
+/node_modules/
+
+# Build and package outputs
+/artifacts/
+/dist/
+/release/
+/*.AppImage
+/*.dmg
+/*.exe
+/*.tgz
+/builder-debug.yml
+/builder-effective-config.yaml
+/*.nsis.7z
+
+# Tests, caches, and temporary files
+/coverage/
+/.nyc_output/
+/.cache/
+/tmp/
+/temp/
+/tmp_*
+*.log
+*.tmp
+*.temp
+
+# Local runtime data and credentials
+/.code-pet/
+/.codepet/
+/.env
+/.env.*
+!/.env.example
 /run.bat
-/dist
-/release
-/artifacts
+
+# Local editor and OS metadata
+/.vscode/
+/.idea/
+/.DS_Store
+/Thumbs.db

@@ -23,7 +23,7 @@ test("클릭 가능한 말풍선 hover는 사용자 지정 배경색을 덮어�
   assert.doesNotMatch(bubbleCss, /\.activity-section\.clickable:hover/);
 });
 
-test("설정 창은 테마 선택 없이 색상, 설치 글꼴, 세 provider, 사용량을 제공한다", () => {
+test("설정 창은 테마 선택 없이 색상, 설치 글꼴, provider 계정과 사용량을 제공한다", () => {
   assert.doesNotMatch(settingsHtml, /name="theme"|화면 테마|data-theme/);
   assert.doesNotMatch(settingsJs, /themeSource|resolvedTheme|prefers-color-scheme/);
   assert.doesNotMatch(settingsCss, /data-theme|theme-option|theme-preview/);
@@ -132,6 +132,17 @@ test("계정 설정은 비활성 프로필 삭제를 확인하고 삭제 중 상
   assert.match(settingsJs, /deleteButton\.disabled = account\.active/);
   assert.match(settingsJs, /"삭제 중…"/);
   assert.match(settingsCss, /\.danger-button/);
+});
+
+test("Codex 프록시 계정 전환은 새 프로필을 확정한 뒤 기존 WebSocket을 재연결시킨다", () => {
+  const switchStart = mainJs.indexOf("async function switchCodexAccount");
+  const switchEnd = mainJs.indexOf("function buildCodexAccountSubmenu", switchStart);
+  const switchSource = mainJs.slice(switchStart, switchEnd);
+
+  assert.match(
+    switchSource,
+    /switchToProfile\(profileKey\)[\s\S]*invalidateProxyAccountsCache\(\)[\s\S]*disconnectWebSocketTunnels\("account-switch"\)/
+  );
 });
 
 test("메뉴에서 사용량 보기와 활동 말풍선 항목을 제거하고 수동 모션을 세 번 재생한다", () => {

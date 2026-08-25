@@ -9,6 +9,8 @@ const {
   fetchClaudeUsage,
   normalizeAgyQuota,
   normalizeClaudeUsage,
+  normalizeGrokUsage,
+  readGrokUsage,
   tierLabel,
 } = require("../src/provider-usage");
 
@@ -57,7 +59,8 @@ test("AGY 응답에서 계정, 플랜, 한도만 정규화한다", async (t) => 
     if (String(url).includes("loadCodeAssist")) {
       return jsonResponse({
         cloudaicompanionProject: "projects/test",
-        currentTier: { displayName: "Google AI Pro" },
+        currentTier: { displayName: "Antigravity" },
+        paidTier: { name: "Google AI Pro" },
       });
     }
     if (String(url).includes("userinfo")) return jsonResponse({ email: "agy@example.com" });
@@ -74,6 +77,52 @@ test("AGY 응답에서 계정, 플랜, 한도만 정규화한다", async (t) => 
   assert.equal(result.plan, "Google AI Pro");
   assert.equal(result.gauges[0].usedPercent, 20);
   assert.equal(tierLabel({ currentTier: { name: "free-tier" } }), "free-tier");
+});
+
+test("Grok billing 로그에서 구독 플랜과 주간 한도를 읽는다", (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "codepet-grok-usage-"));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const logDir = path.join(home, ".grok", "logs");
+  fs.mkdirSync(logDir, { recursive: true });
+  const now = Date.parse("2026-08-08T00:00:00Z");
+  const entry = {
+    ts: "2026-08-07T23:59:30Z",
+    msg: "billing: fetched credits config",
+    ctx: {
+      subscriptionTier: "SuperGrok Plus",
+      config: {
+        creditUsagePercent: 5,
+        currentPeriod: { end: "2026-08-14T00:00:00Z" },
+      },
+    },
+  };
+  fs.writeFileSync(
+    path.join(logDir, "unified.jsonl"),
+    `${JSON.stringify({ msg: "unrelated" })}\n${JSON.stringify(entry)}\n`
+  );
+
+  assert.deepEqual(normalizeGrokUsage(entry), {
+    provider: "grok",
+    plan: "SuperGrok Plus",
+    gauges: [{ label: "주간 한도", usedPercent: 5, resetText: "2026-08-14T00:00:00Z" }],
+  });
+  assert.deepEqual(readGrokUsage({ home, env: {}, now }), normalizeGrokUsage(entry));
+});
+
+test("Grok billing 로그가 오래됐으면 현재 한도로 표시하지 않는다", (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "codepet-grok-stale-"));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const logDir = path.join(home, ".grok", "logs");
+  fs.mkdirSync(logDir, { recursive: true });
+  fs.writeFileSync(path.join(logDir, "unified.jsonl"), JSON.stringify({
+    ts: "2026-08-07T20:00:00Z",
+    msg: "billing: fetched credits config",
+    ctx: { subscriptionTier: "SuperGrok Plus", config: { creditUsagePercent: 5 } },
+  }));
+  assert.throws(
+    () => readGrokUsage({ home, env: {}, now: Date.parse("2026-08-08T00:00:00Z") }),
+    /오래되어/
+  );
 });
 
 test("Claude 사용량 cache는 계정 자격 증명별로 분리한다", async (t) => {

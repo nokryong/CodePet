@@ -172,6 +172,10 @@ class CodexProxy {
     this.log = log;
     this.server = null;
     this.port = null;
+    // WebSocket 인증은 101 handshake 때 고정됩니다. 계정 전환 뒤에도 Codex가
+    // 같은 연결을 재사용하면 이전 계정이 계속 사용되므로, 열린 터널과 진행 중인
+    // handshake를 모두 추적해 선택적으로 재연결시킬 수 있어야 합니다.
+    this.webSocketTunnels = new Set();
     // key -> 쿨다운 해제 시각(ms). 429/401을 맞은 계정은 잠시 후보에서 제외합니다.
     this.cooldowns = new Map();
   }
@@ -238,10 +242,30 @@ class CodexProxy {
   }
 
   stop() {
+    this.disconnectWebSocketTunnels("proxy-stop");
     if (!this.server) return;
     this.server.close();
     this.server = null;
     this.port = null;
+  }
+
+  destroyWebSocketTunnel(tunnel) {
+    if (!tunnel || tunnel.destroyed) return;
+    tunnel.destroyed = true;
+    this.webSocketTunnels.delete(tunnel);
+    tunnel.clientSocket.destroy();
+    if (tunnel.upstreamSocket) tunnel.upstreamSocket.destroy();
+  }
+
+  // Codex 앱 전체가 아니라 이 프록시를 통과하는 Responses WebSocket만 끊습니다.
+  // 클라이언트는 다음 요청에서 자동 재연결하고 새 handshake에 현재 계정 인증이 들어갑니다.
+  disconnectWebSocketTunnels(reason = "manual") {
+    const tunnels = [...this.webSocketTunnels];
+    for (const tunnel of tunnels) this.destroyWebSocketTunnel(tunnel);
+    if (tunnels.length > 0) {
+      this.log(`disconnected ${tunnels.length} codex websocket tunnel(s) (${reason})`);
+    }
+    return tunnels.length;
   }
 
   // 요청 본문을 메모리에 모읍니다. 계정 로테이션 재시도에 같은 본문이 필요하기 때문입니다.
@@ -437,6 +461,30 @@ class CodexProxy {
   }
 
   async handleUpgrade(request, socket, head) {
+    const tunnel = {
+      clientSocket: socket,
+      upstreamSocket: null,
+      established: false,
+      destroyed: false,
+    };
+    this.webSocketTunnels.add(tunnel);
+
+    try {
+      await this.handleUpgradeTunnel(request, socket, head, tunnel);
+    } catch (error) {
+      this.destroyWebSocketTunnel(tunnel);
+      throw error;
+    } finally {
+      // 성공한 101 터널은 close/end/error 때 teardown이 제거합니다.
+      // handshake 실패·취소 경로는 여기서 추적을 끝냅니다.
+      if (!tunnel.established) {
+        this.webSocketTunnels.delete(tunnel);
+        if (tunnel.upstreamSocket) tunnel.upstreamSocket.destroy();
+      }
+    }
+  }
+
+  async handleUpgradeTunnel(request, socket, head, tunnel) {
     // 핸드셰이크가 완료되기 전(수 초 걸릴 수 있음)에 클라이언트가 연결을 끊으면
     // 리스너 없는 'error' 이벤트가 메인 프로세스를 죽입니다. 터널 연결 전까지 임시 가드를 답니다.
     let clientAlive = true;
@@ -457,9 +505,10 @@ class CodexProxy {
     const preferredKey = accounts[0]?.key;
 
     for (let index = 0; index < candidates.length; index += 1) {
-      if (!clientAlive) return;
+      if (!clientAlive || tunnel.destroyed) return;
       const account = candidates[index];
       const auth = account ? await this.authFor(account) : null;
+      if (!clientAlive || tunnel.destroyed) return;
       if (account && !auth?.accessToken) continue;
 
       let upstreamSocket;
@@ -468,6 +517,12 @@ class CodexProxy {
       } catch (error) {
         this.log(`websocket upstream connect failed: ${error.message || error}`);
         continue;
+      }
+      tunnel.upstreamSocket = upstreamSocket;
+
+      if (!clientAlive || tunnel.destroyed) {
+        upstreamSocket.destroy();
+        return;
       }
 
       let status;
@@ -480,7 +535,7 @@ class CodexProxy {
         continue;
       }
 
-      if (!clientAlive) {
+      if (!clientAlive || tunnel.destroyed) {
         upstreamSocket.destroy();
         return;
       }
@@ -493,11 +548,9 @@ class CodexProxy {
         if (head?.length) upstreamSocket.write(head);
         upstreamSocket.pipe(socket);
         socket.pipe(upstreamSocket);
+        tunnel.established = true;
         // upgrade 소켓은 상대가 끊겨도 close 없이 end만 오는 경우가 있어 end도 종료 신호로 취급합니다.
-        const teardown = () => {
-          socket.destroy();
-          upstreamSocket.destroy();
-        };
+        const teardown = () => this.destroyWebSocketTunnel(tunnel);
         for (const eventName of ["error", "close", "end"]) {
           socket.once(eventName, teardown);
           upstreamSocket.once(eventName, teardown);

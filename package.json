@@ -1,8 +1,8 @@
 {
   "name": "code-pet",
-  "version": "1.0.1",
+  "version": "1.0.3",
   "private": false,
-  "description": "Multi-provider desktop companion for Codex, Antigravity, and Claude.",
+  "description": "Multi-provider desktop companion for Codex, Antigravity, Claude, and Grok.",
   "desktopName": "CodePet.desktop",
   "main": "src/main.js",
   "license": "MIT",
@@ -10,8 +10,15 @@
     "code-pet": "bin/code-pet.js"
   },
   "files": [
-    "src/**/*",
-    "bin/**/*",
+    "src/**/*.js",
+    "src/**/*.html",
+    "src/**/*.css",
+    "src/**/*.json",
+    "src/**/*.png",
+    "src/**/*.webp",
+    "src/docker/grok/Dockerfile",
+    "src/docker/grok/codepet-grok-*",
+    "bin/code-pet.js",
     "build/icon.ico",
     "build/icon.png"
   ],
@@ -28,10 +35,18 @@
       "output": "artifacts"
     },
     "files": [
-      "src/**/*",
+      "src/**/*.js",
+      "src/**/*.html",
+      "src/**/*.css",
+      "src/**/*.json",
+      "src/**/*.png",
+      "src/**/*.webp",
+      "src/docker/grok/Dockerfile",
+      "src/docker/grok/codepet-grok-*",
       "build/icon.ico",
       "build/icon.png",
-      "package.json"
+      "package.json",
+      "!node_modules{,/**/*}"
     ],
     "extraResources": [
       {
@@ -56,14 +71,19 @@
       "icon": "build/icon-mac.png",
       "category": "public.app-category.utilities",
       "target": [
-        "dmg"
+        {
+          "target": "dmg",
+          "arch": [
+            "universal"
+          ]
+        }
       ],
-      "artifactName": "CodePet-${version}-mac.${ext}"
+      "artifactName": "CodePet-${version}-mac-universal.${ext}"
     },
     "linux": {
       "icon": "build/icon.png",
       "category": "Utility",
-      "synopsis": "Desktop companion for Codex, Antigravity, and Claude",
+      "synopsis": "Desktop companion for Codex, Antigravity, Claude, and Grok",
       "syncDesktopName": true,
       "target": [
         "AppImage"

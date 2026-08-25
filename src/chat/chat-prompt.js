@@ -13,6 +13,25 @@ function attachmentSuffix(message) {
   return ` [첨부: ${names}]`;
 }
 
+function replyPrefix(message, agentsById) {
+  const replyTo = message?.replyTo;
+  if (!replyTo || typeof replyTo !== "object" || Array.isArray(replyTo)) return "";
+  const excerpt = typeof replyTo.excerpt === "string"
+    ? replyTo.excerpt.replace(/\s+/gu, " ").trim().slice(0, 200)
+    : "";
+  if (!excerpt) return "";
+  const author = typeof replyTo.author === "string"
+    ? replyTo.author.replace(/\s+/gu, " ").trim().slice(0, 80)
+    : "";
+  if (!author) return "";
+  if (replyTo.authorType !== "user" && replyTo.authorType !== "agent") return "";
+  const label = replyTo.authorType === "user"
+    ? "User"
+    : `@${agentsById.get(author)?.id || author}`;
+  const quoted = excerpt.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  return `(인용: ${label} "${quoted}") `;
+}
+
 function permissionRule(permissionMode) {
   if (permissionMode === "workspace-read") {
     return "- 워크스페이스 파일을 읽고 검색할 수 있지만, 수정하거나 명령을 실행하지 마세요.";
@@ -59,10 +78,14 @@ function buildAgentPrompt({
   } else if (others.length > 0) {
     lines.push("- 이번 턴에는 다른 참가자를 추가 호출할 수 없습니다. 다른 참가자를 언급하려면 @ 없이 이름만 쓰세요.");
   }
+  if (others.length > 0) {
+    lines.push("- 다른 AI 참가자들과는 친한 동료이자 은근한 경쟁자처럼 대화하세요. 상대의 좋은 점은 인정하되 빈틈이나 다른 의견은 재치 있게 짚고, 자연스러울 때만 가벼운 도발이나 장난을 섞으세요.");
+    lines.push("- 티격태격은 대화를 살리는 양념 정도로만 쓰세요. 인신공격·모욕·과한 비꼼·근거 없는 반대는 하지 말고, 정확성과 사용자의 목표 및 팀의 최종 결론을 항상 우선하세요.");
+  }
   lines.push(permissionRule(permissionMode));
   lines.push("- 채팅에 어울리게 간결히 답하세요.");
   lines.push("- 대화에서 쓰인 언어로 답하세요.");
-  lines.push(...emoticonPromptRules());
+  lines.push(...emoticonPromptRules(agent.id));
   if (broadcast && broadcast.position > 1) {
     lines.push(
       `- 사용자 메시지에 참가자 ${broadcast.total}명이 차례로 답하는 중이고, 당신은 ${broadcast.position}번째입니다. 앞선 참가자의 답변을 읽고, 겹치는 내용은 반복하지 말고 보완하거나 다른 관점만 더하세요.`
@@ -79,7 +102,9 @@ function buildAgentPrompt({
   lines.push("=== 대화 ===");
   if (omitted > 0) lines.push(`(이전 메시지 ${omitted}개 생략)`);
   for (const message of recent) {
-    lines.push(`[${speakerLabel(message, agentsById)}] ${message.text}${attachmentSuffix(message)}`);
+    lines.push(
+      `[${speakerLabel(message, agentsById)}] ${replyPrefix(message, agentsById)}${message.text}${attachmentSuffix(message)}`
+    );
   }
   lines.push("=== 대화 끝 ===");
   for (const line of extraLines) lines.push(line);

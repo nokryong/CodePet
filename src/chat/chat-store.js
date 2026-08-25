@@ -8,6 +8,9 @@ const STORE_SCHEMA_VERSION = 1;
 const TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const AUTO_TITLE_MAX_LENGTH = 30;
 const DEFAULT_SESSION_TITLE = "새 채팅";
+const SEARCH_RESULT_LIMIT = 50;
+const SEARCH_RESULTS_PER_SESSION = 3;
+const SEARCH_CONTEXT_LENGTH = 40;
 
 let tmpSeq = 0;
 let idSeq = 0;
@@ -79,6 +82,16 @@ function autoTitleFrom(text) {
 function previewFrom(text) {
   const compact = String(text || "").replace(/\s+/g, " ").trim();
   return compact.slice(0, 60);
+}
+
+function normalizeSearchText(text) {
+  return String(text || "").replace(/\s+/gu, " ").trim();
+}
+
+function searchSnippet(text, matchIndex, matchLength) {
+  const start = Math.max(0, matchIndex - SEARCH_CONTEXT_LENGTH);
+  const end = Math.min(text.length, matchIndex + matchLength + SEARCH_CONTEXT_LENGTH);
+  return `${start > 0 ? "…" : ""}${text.slice(start, end)}${end < text.length ? "…" : ""}`;
 }
 
 class ChatStore {
@@ -228,6 +241,39 @@ class ChatStore {
 
   listSessions() {
     return [...this.index.sessions].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  }
+
+  searchSessions(query) {
+    if (typeof query !== "string") return [];
+    const needle = normalizeSearchText(query);
+    if (!needle) return [];
+    const foldedNeedle = needle.toLowerCase();
+    const results = [];
+
+    for (const session of this.listSessions()) {
+      let sessionMatches = 0;
+      const messages = this.readMessages(session.id);
+      for (let index = messages.length - 1; index >= 0; index -= 1) {
+        const message = messages[index];
+        if (!message || message.authorType === "system") continue;
+        const text = normalizeSearchText(message.text);
+        if (!text) continue;
+        const matchIndex = text.toLowerCase().indexOf(foldedNeedle);
+        if (matchIndex < 0) continue;
+
+        results.push({
+          sessionId: session.id,
+          title: session.title || DEFAULT_SESSION_TITLE,
+          snippet: searchSnippet(text, matchIndex, needle.length),
+          messageId: typeof message.id === "string" ? message.id : "",
+          ts: Number.isFinite(message.ts) ? message.ts : 0,
+        });
+        sessionMatches += 1;
+        if (results.length >= SEARCH_RESULT_LIMIT) return results;
+        if (sessionMatches >= SEARCH_RESULTS_PER_SESSION) break;
+      }
+    }
+    return results;
   }
 
   hasSession(id) {

@@ -1,12 +1,15 @@
 // 안전한 마크다운-라이트 토크나이저.
 // HTML을 만들지 않고 토큰만 반환합니다. 렌더링은 chat.js가 DOM API(textContent)로만 수행하므로
 // 에이전트 출력에 어떤 마크업이 있어도 스크립트/HTML로 해석되지 않습니다.
-// 지원: 문단, 순서/비순서 목록, ``` 코드 펜스(언어 라벨), `인라인 코드`, **굵게**, http(s) 링크, @멘션.
+// 지원: 문단, 제목, 인용구, 순서/비순서 목록, ``` 코드 펜스(언어 라벨),
+// `인라인 코드`, **굵게**, *기울임*, ~~취소선~~, http(s) 링크, @멘션.
 (function attachChatMarkdown(global) {
   const FENCE_OPEN = /^```([A-Za-z0-9_+-]*)\s*$/;
   const LIST_ITEM = /^(\s*)([-*]|\d+[.)])\s+(.*)$/;
+  const HEADING = /^(#{1,3})[ \t]+(.+?)\s*$/;
+  const QUOTE_LINE = /^\s{0,3}>[ \t]?(.*)$/;
   const INLINE_PATTERN =
-    /(`[^`\n]+`)|(\*\*[^*\n]+\*\*)|(https?:\/\/[^\s<>"'`)\]]+)|(@[\p{L}\p{N}_-]+)/gu;
+    /(`[^`\n]+`)|(\[([^\]\n]+)\]\((https?:\/\/[^\s<>"'`()\]]+)\))|(\*\*([^*\n]+)\*\*)|(~~([^~\n]+)~~)|(\*([^*\n]+)\*)|(_([^_\n]+)_)|(https?:\/\/[^\s<>"'`)\]]+)|(@[\p{L}\p{N}_-]+)/gu;
 
   function tokenizeInline(text) {
     const source = String(text || "");
@@ -16,9 +19,30 @@
       if (match.index > lastIndex) {
         tokens.push({ type: "text", text: source.slice(lastIndex, match.index) });
       }
-      const [full, code, bold, link, mention] = match;
+      const [
+        full,
+        code,
+        markdownLink,
+        markdownLinkText,
+        markdownLinkHref,
+        bold,
+        boldText,
+        strike,
+        strikeText,
+        italicAsterisk,
+        italicAsteriskText,
+        italicUnderscore,
+        italicUnderscoreText,
+        link,
+        mention,
+      ] = match;
       if (code) tokens.push({ type: "code", text: code.slice(1, -1) });
-      else if (bold) tokens.push({ type: "bold", text: bold.slice(2, -2) });
+      else if (markdownLink) {
+        tokens.push({ type: "link", href: markdownLinkHref, text: markdownLinkText });
+      } else if (bold) tokens.push({ type: "bold", text: boldText });
+      else if (strike) tokens.push({ type: "strike", text: strikeText });
+      else if (italicAsterisk) tokens.push({ type: "italic", text: italicAsteriskText });
+      else if (italicUnderscore) tokens.push({ type: "italic", text: italicUnderscoreText });
       else if (link) tokens.push({ type: "link", href: link, text: link });
       else if (mention) tokens.push({ type: "mention", text: mention });
       lastIndex = match.index + full.length;
@@ -70,6 +94,32 @@
           index += 1;
         }
         blocks.push({ type: "list", ordered, items });
+        continue;
+      }
+
+      const headingMatch = line.match(HEADING);
+      if (headingMatch) {
+        flushParagraph();
+        blocks.push({
+          type: "heading",
+          level: headingMatch[1].length,
+          tokens: tokenizeInline(headingMatch[2]),
+        });
+        index += 1;
+        continue;
+      }
+
+      const quoteMatch = line.match(QUOTE_LINE);
+      if (quoteMatch) {
+        flushParagraph();
+        const quoteLines = [];
+        while (index < lines.length) {
+          const currentQuote = lines[index].match(QUOTE_LINE);
+          if (!currentQuote) break;
+          quoteLines.push(tokenizeInline(currentQuote[1]));
+          index += 1;
+        }
+        blocks.push({ type: "quote", lines: quoteLines });
         continue;
       }
 

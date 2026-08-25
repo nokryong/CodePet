@@ -1,0 +1,190 @@
+#!/usr/bin/env node
+const { spawnSync } = require("node:child_process");
+const crypto = require("node:crypto");
+const fs = require("node:fs");
+const path = require("node:path");
+const { TextDecoder } = require("node:util");
+
+const SOURCE = "/workspace-src";
+const WORKSPACE = "/workspace";
+const CHANGESET_PREFIX = "CODEPET_GROK_CHANGESET_V1 ";
+const COPY_LIMIT = 64 * 1024 * 1024;
+const MAX_CHANGE_FILES = 32;
+const MAX_CHANGE_BYTES = 1024 * 1024;
+const MAX_DIFF_BYTES = 256 * 1024;
+const DIFF_FILE_LIMIT = 64 * 1024;
+const SKIP_ROOTS = new Set([
+  ".git",
+  "node_modules",
+  "artifacts",
+  ".next",
+  "dist",
+  "coverage",
+  "out",
+  ".cache",
+  ".venv",
+  "venv",
+  "__pycache__",
+  "target",
+]);
+
+function sha256(value) {
+  return crypto.createHash("sha256").update(value).digest("hex");
+}
+
+function shouldSkip(relativePath) {
+  return SKIP_ROOTS.has(relativePath.split("/")[0].toLocaleLowerCase("en"));
+}
+
+function scanFiles(root, options = {}) {
+  const { limit = Infinity, rejectLinks = false } = options;
+  const state = { bytes: 0 };
+  const result = new Map();
+
+  function visit(directory, prefix = "") {
+    const entries = fs.readdirSync(directory, { withFileTypes: true });
+    for (const entry of entries) {
+      const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (shouldSkip(relativePath)) continue;
+      const fullPath = path.join(directory, entry.name);
+
+      if (entry.isSymbolicLink()) {
+        if (rejectLinks) throw new Error(`CodePet rejected a link or special file: ${relativePath}`);
+        continue;
+      }
+      if (entry.isDirectory()) {
+        visit(fullPath, relativePath);
+        continue;
+      }
+      if (!entry.isFile()) throw new Error(`CodePet rejected a link or special file: ${relativePath}`);
+
+      const stat = fs.statSync(fullPath);
+      if (state.bytes + stat.size > limit) throw new Error("CodePet workspace copy exceeds 64 MiB.");
+      const content = fs.readFileSync(fullPath);
+      state.bytes += content.length;
+      result.set(relativePath, { content, mode: stat.mode & 0o777 });
+    }
+  }
+
+  visit(root);
+  return result;
+}
+
+function copyWorkspace(files) {
+  fs.mkdirSync(WORKSPACE, { recursive: true, mode: 0o700 });
+  for (const [relativePath, record] of files) {
+    const target = path.join(WORKSPACE, relativePath);
+    fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+    // A Windows read-only bind mount commonly reports source files without an
+    // owner write bit. The scratch copy is disposable and mode changes are not
+    // part of the manifest, so make every copied file private and writable.
+    // The host approval applier preserves the original file mode separately.
+    fs.writeFileSync(target, record.content, { mode: 0o600, flag: "wx" });
+    fs.chmodSync(target, 0o600);
+  }
+}
+
+function textForDiff(record) {
+  if (!record) return "";
+  if (record.content.length > DIFF_FILE_LIMIT || record.content.includes(0)) return null;
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(record.content);
+  } catch {
+    return null;
+  }
+}
+
+function makeFileDiff(relativePath, before, after) {
+  const safePath = relativePath.replace(/[\r\n\t]/gu, "?");
+  const oldText = textForDiff(before);
+  const newText = textForDiff(after);
+  if (oldText === null || newText === null) {
+    return `--- a/${safePath}\n+++ b/${safePath}\nBinary or large file changed`;
+  }
+  const oldLines = before ? oldText.split("\n") : [];
+  const newLines = after ? newText.split("\n") : [];
+  return [
+    `--- a/${safePath}`,
+    `+++ b/${safePath}`,
+    `@@ -1,${oldLines.length} +1,${newLines.length} @@`,
+    ...oldLines.map((line) => `-${line}`),
+    ...newLines.map((line) => `+${line}`),
+  ].join("\n");
+}
+
+function appendBoundedDiff(parts, next) {
+  const currentBytes = Buffer.byteLength(parts.join("\n"), "utf8");
+  const remaining = MAX_DIFF_BYTES - currentBytes;
+  if (remaining <= 0) return false;
+  const bytes = Buffer.from(next, "utf8");
+  if (bytes.length <= remaining) {
+    parts.push(next);
+    return true;
+  }
+  parts.push(`${bytes.subarray(0, remaining).toString("utf8")}\n[diff display truncated]`);
+  return false;
+}
+
+let sourceFiles;
+try {
+  sourceFiles = scanFiles(SOURCE, { limit: COPY_LIMIT, rejectLinks: false });
+  copyWorkspace(sourceFiles);
+} catch (error) {
+  process.stderr.write(`${error?.message || error}\n`);
+  process.exit(1);
+}
+
+const promptFile = "/tmp/codepet-grok-write-prompt";
+fs.writeFileSync(promptFile, fs.readFileSync(0), { mode: 0o600, flag: "wx" });
+const result = spawnSync(
+  "grok-build",
+  ["--prompt-file", promptFile, ...process.argv.slice(2)],
+  { cwd: WORKSPACE, stdio: "inherit" }
+);
+try {
+  fs.rmSync(promptFile, { force: true });
+} catch {}
+if (result.error || result.status !== 0) {
+  if (result.error) process.stderr.write(`Grok execution failed: ${result.error.message}\n`);
+  process.exit(result.status === null ? 1 : result.status);
+}
+
+try {
+  const afterFiles = scanFiles(WORKSPACE, {
+    limit: COPY_LIMIT + MAX_CHANGE_BYTES,
+    rejectLinks: true,
+  });
+  const changes = [];
+  const diffParts = [];
+  let changeBytes = 0;
+  let diffOpen = true;
+
+  for (const relativePath of new Set([...sourceFiles.keys(), ...afterFiles.keys()])) {
+    const before = sourceFiles.get(relativePath) || null;
+    const after = afterFiles.get(relativePath) || null;
+    if (before && after && sha256(before.content) === sha256(after.content)) continue;
+    if (!before && after && (after.mode & 0o111) !== 0) {
+      throw new Error(`CodePet rejected an executable file: ${relativePath}`);
+    }
+    if (changes.length >= MAX_CHANGE_FILES) throw new Error("CodePet workspace change file limit exceeded.");
+    changeBytes += after?.content.length || 0;
+    if (changeBytes > MAX_CHANGE_BYTES) throw new Error("CodePet workspace change size limit exceeded.");
+
+    changes.push({
+      path: relativePath,
+      op: after ? "write" : "delete",
+      originalExists: Boolean(before),
+      originalSha256: sha256(before?.content || Buffer.alloc(0)),
+      ...(after
+        ? { content: after.content.toString("base64"), sha256: sha256(after.content) }
+        : {}),
+    });
+    if (diffOpen) diffOpen = appendBoundedDiff(diffParts, makeFileDiff(relativePath, before, after));
+  }
+
+  const manifest = { version: 1, changes, diff: diffParts.join("\n") };
+  process.stdout.write(`\n${CHANGESET_PREFIX}${JSON.stringify(manifest)}\n`);
+} catch (error) {
+  process.stderr.write(`${error?.message || error}\n`);
+  process.exit(1);
+}

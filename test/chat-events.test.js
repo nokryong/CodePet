@@ -1,7 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { parseClaudeLine, parseCodexLine, parseAgyLine, createLineParser } = require("../src/chat/chat-events");
+const { parseClaudeLine, parseCodexLine, parseAgyLine, parseGrokLine, createLineParser } = require("../src/chat/chat-events");
 
 test("claude: 텍스트 델타 스트림 이벤트", () => {
   const line = JSON.stringify({
@@ -49,6 +49,19 @@ test("codex: 명령 실행 시작은 status", () => {
   assert.deepEqual(parseCodexLine(line), { kind: "status", label: "실행: ls -al" });
 });
 
+test("codex: 스킬 컨텍스트 예산 경고는 오류로 취급하지 않는다", () => {
+  const line = JSON.stringify({
+    type: "item.completed",
+    item: {
+      id: "item_0",
+      type: "error",
+      message:
+        "Skill descriptions were shortened to fit the 2% skills context budget. Codex can still see every skill, but some descriptions are shorter.",
+    },
+  });
+  assert.equal(parseCodexLine(line), null);
+});
+
 test("codex: turn.failed의 중첩 오류 원인을 표시한다", () => {
   const line = JSON.stringify({
     type: "turn.failed",
@@ -78,4 +91,26 @@ test("agy stream-json의 최종 응답과 권한 거부를 정규화한다", () 
   assert.deepEqual(parseAgyLine(JSON.stringify({ event: "result", result: { status: "SUCCESS", response: "안녕" } })), { kind: "final", text: "안녕" });
   const denied = parseAgyLine(JSON.stringify({ event: "step_update", step_update: { state: "ERROR", tool_name: "run_command", tool_info: { error: { message: "permission denied" } } } }));
   assert.equal(denied.kind, "approval-required");
+});
+
+test("grok streaming events parse deltas, status, result errors, and broken fallback", () => {
+  assert.equal(typeof createLineParser("grok"), "function");
+  assert.deepEqual(parseGrokLine(JSON.stringify({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "hello" } } })), { kind: "delta", text: "hello" });
+  assert.equal(parseGrokLine(JSON.stringify({ type: "stream_event", event: { type: "content_block_start", content_block: { type: "thinking" } } })).kind, "status");
+  assert.deepEqual(parseGrokLine(JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "done" })), { kind: "final", text: "done" });
+  assert.equal(parseGrokLine(JSON.stringify({ type: "result", subtype: "error_during_execution", is_error: true, errors: ["bad"] })).kind, "error");
+  assert.match(
+    parseGrokLine(JSON.stringify({ type: "result", subtype: "error_during_execution", is_error: true, errors: [{ message: "blocked" }] })).message,
+    /blocked/
+  );
+  assert.deepEqual(parseGrokLine("broken output"), { kind: "fallback", text: "broken output" });
+});
+
+test("grok Docker 변경 세트는 일반 답변과 분리된 내부 이벤트로 파싱한다", () => {
+  const manifest = { version: 1, changes: [], diff: "" };
+  assert.deepEqual(
+    parseGrokLine(`CODEPET_GROK_CHANGESET_V1 ${JSON.stringify(manifest)}`),
+    { kind: "workspace-change-manifest", manifest }
+  );
+  assert.equal(parseGrokLine("CODEPET_GROK_CHANGESET_V1 {broken").kind, "error");
 });

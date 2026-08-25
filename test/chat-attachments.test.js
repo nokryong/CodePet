@@ -6,6 +6,7 @@ const path = require("node:path");
 
 const {
   importAttachment,
+  importAttachmentBuffer,
   readImagePreview,
   readInlineText,
   sniffImageMime,
@@ -45,6 +46,44 @@ test("이미지 첨부: 복사 + 내용 주소 파일명 + 메타데이터", () 
   assert.ok(fs.existsSync(path.join(attachments, record.fileName)));
   // renderer로 넘어가는 레코드에 원본 경로가 없어야 한다.
   assert.ok(!JSON.stringify(record).includes(source.replace(/\\/g, "\\\\")));
+});
+
+test("붙여넣은 이미지 바이트를 기존 첨부 저장소에 저장한다", () => {
+  const { attachments } = makeDirs();
+  const result = importAttachmentBuffer({
+    name: "붙여넣은 화면.png",
+    data: PNG_BYTES.buffer.slice(PNG_BYTES.byteOffset, PNG_BYTES.byteOffset + PNG_BYTES.byteLength),
+    attachmentsDir: attachments,
+    requireImage: true,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.attachment.name, "붙여넣은 화면.png");
+  assert.equal(result.attachment.kind, "image");
+  assert.equal(result.attachment.mime, "image/png");
+  assert.ok(fs.existsSync(path.join(attachments, result.attachment.fileName)));
+});
+
+test("붙여넣기 전용 경로는 이미지가 아닌 바이트와 용량 초과를 거부한다", () => {
+  const { attachments } = makeDirs();
+  const fakeImage = importAttachmentBuffer({
+    name: "fake.png",
+    data: Buffer.from("plain text"),
+    attachmentsDir: attachments,
+    requireImage: true,
+  });
+  assert.equal(fakeImage.ok, false);
+  assert.match(fakeImage.error, /이미지 형식/);
+
+  const tooBig = importAttachmentBuffer({
+    name: "large.png",
+    data: PNG_BYTES,
+    attachmentsDir: attachments,
+    maxFileBytes: 3,
+    requireImage: true,
+  });
+  assert.equal(tooBig.ok, false);
+  assert.match(tooBig.error, /너무 큽니다/);
 });
 
 test("같은 내용은 같은 id로 중복 제거된다", () => {

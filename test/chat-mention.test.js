@@ -6,6 +6,7 @@ const AGENTS = [
   { id: "claude", aliases: ["claude"] },
   { id: "codex", aliases: ["codex"] },
   { id: "agy", aliases: ["agy", "antigravity"] },
+  { id: "grok", aliases: ["grok"] },
 ];
 
 test("여러 에이전트를 한 메시지에서 순서대로 찾는다", () => {
@@ -27,6 +28,10 @@ test("보조 별칭(@antigravity)도 같은 에이전트로 연결한다", () =>
   assert.deepEqual(parseMentions("@antigravity 상태 알려줘", AGENTS), ["agy"]);
 });
 
+test("@grok 멘션을 Grok 참가자로 연결한다", () => {
+  assert.deepEqual(parseMentions("@grok 이 결론 검토해줘", AGENTS), ["grok"]);
+});
+
 test("같은 에이전트를 여러 번 불러도 한 번만 반환한다", () => {
   assert.deepEqual(parseMentions("@codex @codex야 @codex!", AGENTS), ["codex"]);
 });
@@ -36,11 +41,13 @@ test("그룹 별칭은 모든 에이전트를 부른다", () => {
     "claude",
     "codex",
     "agy",
+    "grok",
   ]);
   assert.deepEqual(parseMentions("@all standup", AGENTS, ["all", "모두"]), [
     "claude",
     "codex",
     "agy",
+    "grok",
   ]);
 });
 

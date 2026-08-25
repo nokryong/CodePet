@@ -1,5 +1,7 @@
 const crypto = require("node:crypto");
+const fs = require("node:fs");
 const os = require("node:os");
+const path = require("node:path");
 const { createClaudeFileStore } = require("./claude-live-credentials");
 
 const CLAUDE_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
@@ -72,6 +74,62 @@ function normalizeClaudeUsage(data) {
       resetText: value.resets_at || "",
     }];
   });
+}
+
+function normalizeGrokUsage(entry) {
+  const config = entry?.ctx?.config || {};
+  const usedPercent = Number(config.creditUsagePercent);
+  const plan = typeof entry?.ctx?.subscriptionTier === "string"
+    ? entry.ctx.subscriptionTier.trim()
+    : "";
+  const gauges = Number.isFinite(usedPercent)
+    ? [{
+      label: "주간 한도",
+      usedPercent: clampPercent(usedPercent),
+      resetText: config.currentPeriod?.end || config.billingPeriodEnd || "",
+    }]
+    : [];
+  if (!plan && gauges.length === 0) return null;
+  return { provider: "grok", plan: plan || null, gauges };
+}
+
+function readGrokUsage({
+  home = os.homedir(),
+  env = process.env,
+  now = Date.now(),
+  maxAgeMs = 10 * 60 * 1000,
+  maxBytes = 4 * 1024 * 1024,
+} = {}) {
+  const grokHome = env.GROK_HOME || path.join(home, ".grok");
+  const logPath = path.join(grokHome, "logs", "unified.jsonl");
+  const stat = fs.statSync(logPath);
+  const length = Math.min(stat.size, maxBytes);
+  const buffer = Buffer.alloc(length);
+  const file = fs.openSync(logPath, "r");
+  try {
+    fs.readSync(file, buffer, 0, length, stat.size - length);
+  } finally {
+    fs.closeSync(file);
+  }
+
+  const lines = buffer.toString("utf8").split(/\r?\n/);
+  if (stat.size > length) lines.shift();
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    let entry;
+    try {
+      entry = JSON.parse(lines[index]);
+    } catch {
+      continue;
+    }
+    if (entry?.msg !== "billing: fetched credits config") continue;
+    const timestamp = Date.parse(entry.ts);
+    if (Number.isFinite(timestamp) && now - timestamp > maxAgeMs) {
+      throw new Error("Grok 한도 정보가 오래되어 다시 조회해야 합니다.");
+    }
+    const usage = normalizeGrokUsage(entry);
+    if (usage) return usage;
+  }
+  throw new Error("Grok 한도 정보를 찾지 못했습니다.");
 }
 
 async function json(url, options, timeout = 8000) {
@@ -151,7 +209,7 @@ async function fetchClaudeUsage({ home = os.homedir(), force = false, credential
 }
 
 function tierLabel(assist) {
-  const tier = assist?.currentTier || assist?.current_tier || assist?.paidTier || null;
+  const tier = assist?.paidTier || assist?.paid_tier || assist?.currentTier || assist?.current_tier || null;
   if (typeof tier === "string") return tier;
   return tier?.displayName || tier?.display_name || tier?.name || tier?.id || null;
 }
@@ -213,5 +271,7 @@ module.exports = {
   fetchClaudeUsage,
   normalizeAgyQuota,
   normalizeClaudeUsage,
+  normalizeGrokUsage,
+  readGrokUsage,
   tierLabel,
 };

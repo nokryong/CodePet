@@ -99,6 +99,85 @@ function safeCopyExtension(extension, kind, mime) {
   return "bin";
 }
 
+function persistAttachmentContent({
+  name,
+  content,
+  attachmentsDir,
+  currentSessionBytes = 0,
+  maxFileBytes = MAX_FILE_BYTES,
+  maxSessionBytes = MAX_SESSION_BYTES,
+  requireImage = false,
+  fsApi = fs,
+}) {
+  const size = content.length;
+  if (size > maxFileBytes) {
+    return {
+      ok: false,
+      error: `파일이 너무 큽니다. (최대 ${Math.floor(maxFileBytes / 1024 / 1024)}MiB)`,
+    };
+  }
+  if (currentSessionBytes + size > maxSessionBytes) {
+    return {
+      ok: false,
+      error: `세션 첨부 용량 한도를 초과합니다. (최대 ${Math.floor(maxSessionBytes / 1024 / 1024)}MiB)`,
+    };
+  }
+
+  const extension = path.extname(String(name || "")).toLowerCase();
+  if (DANGEROUS_EXTENSIONS.has(extension) || isExecutableMagic(content)) {
+    return { ok: false, error: "실행 파일 형식은 첨부할 수 없습니다." };
+  }
+
+  const { mime, kind } = detectMime(content, extension);
+  if (requireImage && kind !== "image") {
+    return { ok: false, error: "클립보드 데이터가 지원되는 이미지 형식이 아닙니다." };
+  }
+
+  const hash = crypto.createHash("sha256").update(content).digest("hex");
+  const id = hash.slice(0, 16);
+  const fileName = `${id}.${safeCopyExtension(extension, kind, mime)}`;
+  const targetPath = path.join(attachmentsDir, fileName);
+
+  try {
+    fsApi.mkdirSync(attachmentsDir, { recursive: true });
+    if (!fsApi.existsSync(targetPath)) {
+      // 임시 파일에 쓴 뒤 rename: 복사 도중 종료돼도 깨진 첨부가 남지 않습니다.
+      const tmpPath = `${targetPath}.${process.pid}.tmp`;
+      fsApi.writeFileSync(tmpPath, content);
+      fsApi.renameSync(tmpPath, targetPath);
+    }
+  } catch {
+    return { ok: false, error: "첨부 파일을 저장하지 못했습니다." };
+  }
+
+  return {
+    ok: true,
+    attachment: {
+      id,
+      name: sanitizeDisplayName(name),
+      mime,
+      kind,
+      size,
+      fileName,
+      sha256: hash,
+    },
+  };
+}
+
+function importAttachmentBuffer({ data, ...options }) {
+  let content;
+  if (Buffer.isBuffer(data)) {
+    content = data;
+  } else if (data instanceof ArrayBuffer) {
+    content = Buffer.from(data);
+  } else if (ArrayBuffer.isView(data)) {
+    content = Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+  } else {
+    return { ok: false, error: "첨부 데이터를 읽을 수 없습니다." };
+  }
+  return persistAttachmentContent({ ...options, content });
+}
+
 function importAttachment({
   sourcePath,
   attachmentsDir,
@@ -140,40 +219,15 @@ function importAttachment({
   } catch {
     return { ok: false, error: "파일을 읽을 수 없습니다." };
   }
-  if (isExecutableMagic(content)) {
-    return { ok: false, error: "실행 파일 형식은 첨부할 수 없습니다." };
-  }
-
-  const { mime, kind } = detectMime(content, extension);
-  const hash = crypto.createHash("sha256").update(content).digest("hex");
-  const id = hash.slice(0, 16);
-  const fileName = `${id}.${safeCopyExtension(extension, kind, mime)}`;
-  const targetPath = path.join(attachmentsDir, fileName);
-
-  try {
-    fsApi.mkdirSync(attachmentsDir, { recursive: true });
-    if (!fsApi.existsSync(targetPath)) {
-      // 임시 파일에 쓴 뒤 rename: 복사 도중 종료돼도 깨진 첨부가 남지 않습니다.
-      const tmpPath = `${targetPath}.${process.pid}.tmp`;
-      fsApi.writeFileSync(tmpPath, content);
-      fsApi.renameSync(tmpPath, targetPath);
-    }
-  } catch {
-    return { ok: false, error: "첨부 파일을 저장하지 못했습니다." };
-  }
-
-  return {
-    ok: true,
-    attachment: {
-      id,
-      name: sanitizeDisplayName(sourcePath),
-      mime,
-      kind,
-      size: stat.size,
-      fileName,
-      sha256: hash,
-    },
-  };
+  return persistAttachmentContent({
+    name: sourcePath,
+    content,
+    attachmentsDir,
+    currentSessionBytes,
+    maxFileBytes,
+    maxSessionBytes,
+    fsApi,
+  });
 }
 
 // 이미지 미리보기: attachments 디렉터리 안의 검증된 파일명만, 데이터 응답으로 제공합니다.
@@ -215,6 +269,7 @@ module.exports = {
   PREVIEW_MAX_BYTES,
   DANGEROUS_EXTENSIONS,
   importAttachment,
+  importAttachmentBuffer,
   readImagePreview,
   readInlineText,
   sniffImageMime,

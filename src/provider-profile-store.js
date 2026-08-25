@@ -22,6 +22,9 @@ function secretIdentity(secret) {
     // 서버 응답의 밀리초 단위 흔들림만 흡수해 한 계정이 여러 프로필로 늘어나는 것을 막습니다.
     return `claude-session:${Math.floor(claudeRefreshExpiry / 10000)}`;
   }
+  const nestedRefreshToken = Object.values(secret || {}).find(
+    (value) => value && typeof value === "object" && typeof value.refresh_token === "string"
+  )?.refresh_token;
   return (
     secret?.refresh_token ||
     secret?.refreshToken ||
@@ -29,6 +32,8 @@ function secretIdentity(secret) {
     secret?.claudeAiOauth?.refreshToken ||
     // macOS 데스크톱 앱 관리 인증은 refreshToken이 비어 있을 수 있어 accessToken으로 식별합니다.
     secret?.claudeAiOauth?.accessToken ||
+    // Grok auth.json은 issuer/client 조합을 동적 최상위 키로 쓰고 그 아래 refresh_token을 둡니다.
+    nestedRefreshToken ||
     null
   );
 }

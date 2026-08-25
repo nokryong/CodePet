@@ -1,0 +1,10 @@
+#!/bin/sh
+set -eu
+
+umask 077
+prompt_file="$(mktemp /tmp/codepet-grok-prompt.XXXXXX)"
+cat > "$prompt_file"
+
+# The container is disposable and /tmp is a private tmpfs. exec keeps signal
+# forwarding simple; Docker removes the prompt together with the container.
+exec grok-build --prompt-file "$prompt_file" "$@"

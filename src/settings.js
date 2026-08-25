@@ -204,6 +204,40 @@ function createEmptyState(title) {
   return empty;
 }
 
+function createGrokDockerRow(provider) {
+  const status = provider.dockerRead;
+  const hostSync = status.loginMode === "host-sync";
+  const row = createElement("article", "list-row docker-runtime-row");
+  const identity = createElement("div", "list-identity");
+  identity.appendChild(createElement("span", "account-avatar", "D"));
+
+  const copy = createElement("div", "list-copy");
+  const titleRow = createElement("span");
+  titleRow.appendChild(createElement("strong", "", "Docker 워크스페이스"));
+  if (status.authenticated) titleRow.appendChild(createElement("span", "active-chip", "연결됨"));
+  copy.append(
+    titleRow,
+    createElement("small", "", status.reason || "프로젝트 하나만 읽기 전용으로 격리합니다.")
+  );
+  identity.appendChild(copy);
+
+  let actionLabel = hostSync ? "인증 동기화" : "Docker 로그인";
+  if (status.available === false) actionLabel = "사용 불가";
+  else if (status.authenticated) actionLabel = hostSync ? "다시 동기화" : "다시 로그인";
+  const button = createElement(
+    "button",
+    "button",
+    actionLabel
+  );
+  button.type = "button";
+  button.disabled = status.available === false;
+  button.addEventListener("click", () =>
+    runAccountAction({ provider: provider.id, action: "docker-login" }, button)
+  );
+  row.append(identity, button);
+  return row;
+}
+
 function createProviderGroup(provider) {
   const group = createElement("section", "provider-group");
   const heading = createElement("header", "provider-heading");
@@ -222,13 +256,14 @@ function createProviderGroup(provider) {
   group.appendChild(heading);
 
   const list = createElement("div", "stack-list");
+  if (provider.id === "grok" && provider.dockerRead) {
+    list.appendChild(createGrokDockerRow(provider));
+  }
   if (!provider.accounts?.length) {
     list.appendChild(createEmptyState("저장된 계정 없음"));
-    group.appendChild(list);
-    return group;
   }
 
-  for (const account of provider.accounts) {
+  for (const account of provider.accounts || []) {
     const row = createElement("article", "list-row");
     const identity = createElement("div", "list-identity");
     identity.appendChild(
@@ -355,7 +390,9 @@ async function runAccountAction(input, sourceButton) {
     ? "전환 중…"
     : input.action === "delete"
       ? "삭제 중…"
-      : "여는 중…";
+      : input.action === "docker-login"
+        ? "준비 중…"
+        : "여는 중…";
   setButtonBusy(sourceButton, true, busyLabel);
   try {
     const response = await api.account(input);

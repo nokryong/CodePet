@@ -37,26 +37,34 @@ function resolvedEffort(record, model, configured) {
 
 // capability record + 세션 설정 → 채팅방 참가자.
 // commandPath/needsShell 같은 실행 정보는 여기서 제거되어 방/renderer로 가지 않습니다.
-function roomAgentFromCapability(record, config = {}) {
+function roomAgentFromCapability(record, config = {}, permissionMode = "chat") {
   const model = resolvedModel(record, config.model);
+  const permission = record.permissions?.[permissionMode];
+  const modeSupported = permission?.supported !== false;
   return {
     id: record.id,
     name: record.name,
     color: record.color,
     aliases: [...(record.aliases || [record.id])],
-    available: record.status === "cli",
+    available: record.status === "cli" && modeSupported,
     enabled: config.enabled !== false,
-    reason: record.reason || "",
+    reason: modeSupported
+      ? record.reason || ""
+      : permissionMode === "chat"
+        ? "채팅 실행 통합이 아직 준비되지 않았습니다."
+        : permission?.reason || `${record.name}는 이 권한 모드를 지원하지 않습니다.`,
     version: record.version || "",
     model,
     effort: resolvedEffort(record, model, config.effort),
-    autoApprove: Boolean(config.autoApprove),
+    autoApprove: record.id === "grok" && permissionMode === "workspace-write"
+      ? false
+      : Boolean(config.autoApprove),
   };
 }
 
-function roomAgentsFromCapabilities(records, sessionAgents = {}) {
+function roomAgentsFromCapabilities(records, sessionAgents = {}, permissionMode = "chat") {
   return (records || []).map((record) =>
-    roomAgentFromCapability(record, sessionAgents[record.id] || {})
+    roomAgentFromCapability(record, sessionAgents[record.id] || {}, permissionMode)
   );
 }
 

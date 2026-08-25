@@ -67,7 +67,7 @@ function probeCodexModelCatalog(commandPath, needsShell, timeoutMs = 8000) {
     child.stdin.write(`${JSON.stringify({
       id: 1,
       method: "initialize",
-      params: { clientInfo: { name: "code-pet", version: "1.0.1" }, capabilities: { experimentalApi: true } },
+      params: { clientInfo: { name: "code-pet", version: "1.0.3" }, capabilities: { experimentalApi: true } },
     })}\n`);
   });
 }
@@ -112,6 +112,27 @@ function probeAgyModelCatalog(commandPath, needsShell, timeoutMs = MODEL_PROBE_T
       quietTimer = setTimeout(finish, 350);
     });
   });
+}
+
+function parseGrokAuthStatus(output) {
+  const text = String(output || "");
+  if (/\byou are not authenticated\b/i.test(text)) return "unauthenticated";
+  if (/\byou are logged in(?:\s+with\b[^\r\n.]*)?[.!]?/i.test(text)) return "authenticated";
+  return "unknown";
+}
+
+function parseGrokModels(output) {
+  const models = [];
+  const seen = new Set();
+  for (const line of String(output || "").split(/\r?\n/)) {
+    const match = line.match(
+      /^\s*\*\s+([A-Za-z0-9][A-Za-z0-9._:/-]{0,63})(?:\s+\(default\))?\s*$/i
+    );
+    if (!match || seen.has(match[1])) continue;
+    seen.add(match[1]);
+    models.push(match[1]);
+  }
+  return models.length > 0 ? ["default", ...models] : null;
 }
 
 // 모델/노력 옵션은 설치된 CLI --help에서 검증된 플래그에만 연결됩니다.
@@ -200,13 +221,40 @@ const PROVIDER_DEFS = Object.freeze([
       "workspace-write": Object.freeze({ supported: true, enforcement: "sandbox" }),
     }),
   }),
+  Object.freeze({
+    id: "grok",
+    name: "Grok",
+    color: "#111111",
+    aliases: Object.freeze(["grok"]),
+    command: "grok",
+    installHint: "Grok Build CLI가 필요합니다. https://x.ai/cli 참고",
+    installUrl: "https://x.ai/cli",
+    authProbeArgs: Object.freeze(["models"]),
+    loginCommand: "grok login",
+    models: Object.freeze(["default", "grok-4.5"]),
+    // Grok Build 1.0.0의 실제 --effort 허용값입니다.
+    efforts: Object.freeze(["default", "low", "medium", "high"]),
+    allowCustomModel: false,
+    modelsProbeArgs: Object.freeze(["models"]),
+    supportsImages: "unsupported",
+    streaming: "streaming-messages-json",
+    permissions: Object.freeze({
+      // 네이티브 Grok은 워크스페이스 경계로 사용하지 않습니다. 기본 정의는
+      // 닫힌 상태이고, 실제 Docker Linux 백엔드 프로브가 통과할 때만 아래
+      // 읽기와 승인형 쓰기를 컨테이너 권한으로 승격합니다.
+      chat: Object.freeze({ supported: true, enforcement: "tool-policy" }),
+      "workspace-read": Object.freeze({ supported: false, enforcement: "unavailable" }),
+      "workspace-write": Object.freeze({ supported: false, enforcement: "unavailable" }),
+    }),
+  }),
 ]);
 
 function cliCandidates(providerId, platform, env, home) {
+  const pathApi = platform === "win32" ? path.win32 : path;
   if (providerId === "claude") {
-    if (platform === "win32") return [path.join(home, ".local", "bin", "claude.exe")];
+    if (platform === "win32") return [pathApi.join(home, ".local", "bin", "claude.exe")];
     return [
-      path.join(home, ".local", "bin", "claude"),
+      pathApi.join(home, ".local", "bin", "claude"),
       "/opt/homebrew/bin/claude",
       "/usr/local/bin/claude",
     ];
@@ -214,7 +262,7 @@ function cliCandidates(providerId, platform, env, home) {
   if (providerId === "codex") {
     if (platform === "win32") return [];
     return [
-      path.join(home, ".local", "bin", "codex"),
+      pathApi.join(home, ".local", "bin", "codex"),
       "/opt/homebrew/bin/codex",
       "/usr/local/bin/codex",
     ];
@@ -222,14 +270,23 @@ function cliCandidates(providerId, platform, env, home) {
   if (providerId === "agy") {
     if (platform === "win32") {
       return [
-        path.join(env.LOCALAPPDATA || "", "agy", "bin", "agy.exe"),
-        path.join(env.LOCALAPPDATA || "", "Antigravity", "agy.exe"),
-      ].filter((candidate) => candidate && !candidate.startsWith(path.sep));
+        pathApi.join(env.LOCALAPPDATA || "", "agy", "bin", "agy.exe"),
+        pathApi.join(env.LOCALAPPDATA || "", "Antigravity", "agy.exe"),
+      ].filter((candidate) => candidate && !candidate.startsWith(pathApi.sep));
     }
     return [
-      path.join(home, ".local", "bin", "agy"),
+      pathApi.join(home, ".local", "bin", "agy"),
       "/opt/homebrew/bin/agy",
       "/usr/local/bin/agy",
+    ];
+  }
+  if (providerId === "grok") {
+    if (platform === "win32") return [pathApi.join(home, ".grok", "bin", "grok.exe")];
+    return [
+      pathApi.join(home, ".grok", "bin", "grok"),
+      pathApi.join(home, ".local", "bin", "grok"),
+      "/opt/homebrew/bin/grok",
+      "/usr/local/bin/grok",
     ];
   }
   return [];
@@ -240,10 +297,11 @@ function guiEvidencePaths(providerId, platform, env) {
   if (providerId !== "agy") return [];
   if (platform === "darwin") return ["/Applications/Antigravity.app"];
   if (platform === "linux") return ["/opt/Antigravity/antigravity", "/usr/share/antigravity"];
+  const pathApi = platform === "win32" ? path.win32 : path;
   return [
-    path.join(env.LOCALAPPDATA || "", "Programs", "antigravity", "Antigravity.exe"),
-    path.join(env.ProgramFiles || "", "Antigravity", "Antigravity.exe"),
-  ].filter((candidate) => candidate && !candidate.startsWith(path.sep));
+    pathApi.join(env.LOCALAPPDATA || "", "Programs", "antigravity", "Antigravity.exe"),
+    pathApi.join(env.ProgramFiles || "", "Antigravity", "Antigravity.exe"),
+  ].filter((candidate) => candidate && !candidate.startsWith(pathApi.sep));
 }
 
 function defaultRunCommand(file, args, { timeoutMs = PROBE_TIMEOUT_MS, shell = false } = {}) {
@@ -286,6 +344,7 @@ function createCapabilityService(options = {}) {
     (options.runCommand ? null : probeCodexModelCatalog);
   const agyModelProbe = options.agyModelProbe ||
     (options.runCommand ? null : probeAgyModelCatalog);
+  const grokDockerProbe = options.grokDockerProbe || null;
   // cache: { get(): object|null, set(object): void } — 저장 위치는 호출자가 결정합니다.
   const cache = options.cache || { get: () => null, set: () => {} };
 
@@ -337,6 +396,22 @@ function createCapabilityService(options = {}) {
       timeoutMs: PROBE_TIMEOUT_MS,
       shell: needsShell,
     });
+    if (def.id === "grok") {
+      const authStatus = parseGrokAuthStatus(`${result.stdout || ""}\n${result.stderr || ""}`);
+      if (authStatus === "authenticated") return { authStatus, authReason: "" };
+      if (authStatus === "unauthenticated") {
+        return {
+          authStatus,
+          authReason: `${def.name} 로그인이 필요합니다.`,
+        };
+      }
+      return {
+        authStatus: "unknown",
+        authReason: result.ok
+          ? "Grok CLI의 로그인 상태 응답을 확인하지 못했습니다."
+          : "Grok CLI 로그인 상태 확인에 실패했습니다.",
+      };
+    }
     if (!result.ok) {
       return {
         authStatus: "unauthenticated",
@@ -376,6 +451,9 @@ function createCapabilityService(options = {}) {
       shell: needsShell,
     });
     if (!result.ok) return null;
+    if (def.id === "grok") {
+      return parseGrokModels(`${result.stdout || ""}\n${result.stderr || ""}`);
+    }
     const models = String(result.stdout || "")
       .split(/\r?\n/)
       .map((line) => line.trim())
@@ -400,13 +478,32 @@ function createCapabilityService(options = {}) {
       allowCustomModel: def.allowCustomModel,
       supportsImages: def.supportsImages,
       streaming: def.streaming,
-      permissions: def.permissions,
+      permissions: { ...def.permissions },
       guiInstalled: false,
       authStatus: "unavailable",
       authReason: "CLI를 먼저 설치해야 합니다.",
       installUrl: def.installUrl,
       loginCommand: def.loginCommand || null,
     };
+
+    if (def.id === "grok" && grokDockerProbe) {
+      let docker;
+      try {
+        docker = await grokDockerProbe();
+      } catch (error) {
+        docker = { available: false, reason: error?.message || String(error) };
+      }
+      record.permissions["workspace-read"] = docker?.available
+        ? { supported: true, enforcement: "container" }
+        : {
+            supported: false,
+            enforcement: "unavailable",
+            reason: docker?.reason || "Docker 격리 실행기를 사용할 수 없습니다.",
+          };
+      record.permissions["workspace-write"] = docker?.available
+        ? { supported: true, enforcement: "container-copy-approval" }
+        : { supported: false, enforcement: "unavailable", reason: docker?.reason || "Docker 격리 실행기를 사용할 수 없습니다." };
+    }
 
     record.guiInstalled = guiEvidencePaths(def.id, platform, env).some((entry) => existsSafe(entry));
 
@@ -576,6 +673,8 @@ module.exports = {
   MODEL_PROBE_TIMEOUT_MS,
   probeCodexModelCatalog,
   probeAgyModelCatalog,
+  parseGrokAuthStatus,
+  parseGrokModels,
   cliCandidates,
   guiEvidencePaths,
   createCapabilityService,

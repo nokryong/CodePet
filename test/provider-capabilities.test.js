@@ -54,9 +54,137 @@ function makeService({
   return { service, calls };
 }
 
+function makeGrokService(modelsResult, extra = {}) {
+  const grokPath = path.win32.join("C:\\Users\\u", ".grok", "bin", "grok.exe");
+  const files = new Set([grokPath]);
+  const calls = [];
+  const service = createCapabilityService({
+    platform: "win32",
+    env: WIN_ENV,
+    home: "C:\\Users\\u",
+    fs: {
+      existsSync: (file) => files.has(file),
+      statSync: () => ({ mtimeMs: 7, size: 8 }),
+    },
+    runCommand: async (file, args) => {
+      calls.push({ file, args });
+      if (file === grokPath && args[0] === "--version") {
+        return { ok: true, stdout: "grok 1.0.0 (abc123) [stable]\n", stderr: "" };
+      }
+      if (file === grokPath && args[0] === "models") return modelsResult;
+      return { ok: false, stdout: "", stderr: "" };
+    },
+    cache: { get: () => null, set: () => {} },
+    ...extra,
+  });
+  return { service, calls, grokPath };
+}
+
 test("agy 후보에 공식 Windows 설치 경로가 포함된다", () => {
   const candidates = cliCandidates("agy", "win32", WIN_ENV, "C:\\Users\\u");
-  assert.ok(candidates.includes(path.join(WIN_ENV.LOCALAPPDATA, "agy", "bin", "agy.exe")));
+  assert.ok(candidates.includes(path.win32.join(WIN_ENV.LOCALAPPDATA, "agy", "bin", "agy.exe")));
+});
+
+test("grok 후보에 공식 관리형 설치 경로가 포함된다", () => {
+  const candidates = cliCandidates("grok", "win32", WIN_ENV, "C:\\Users\\u");
+  assert.deepEqual(candidates, [path.win32.join("C:\\Users\\u", ".grok", "bin", "grok.exe")]);
+});
+
+test("grok 정의는 검증된 모델, 노력, 스트리밍과 단계별 권한 상태를 제공한다", () => {
+  const { service } = makeService({});
+  const grok = service.defs.find((def) => def.id === "grok");
+  assert.ok(grok);
+  assert.deepEqual(grok.models, ["default", "grok-4.5"]);
+  assert.deepEqual(grok.efforts, ["default", "low", "medium", "high"]);
+  assert.equal(grok.streaming, "streaming-messages-json");
+  assert.equal(grok.permissions["workspace-write"].enforcement, "unavailable");
+  assert.equal(grok.permissions.chat.supported, true);
+  assert.equal(grok.permissions["workspace-read"].supported, false);
+  assert.equal(grok.permissions["workspace-write"].supported, false);
+  assert.deepEqual(grok.authProbeArgs, ["models"]);
+  assert.deepEqual(grok.modelsProbeArgs, ["models"]);
+});
+
+test("grok models 출력으로 로그인 상태와 모델 목록을 함께 판별한다", async () => {
+  const { service, calls, grokPath } = makeGrokService({
+    ok: true,
+    stdout: [
+      "You are logged in with grok.com.",
+      "",
+      "Default model: grok-4.5",
+      "",
+      "Available models:",
+      "  * grok-4.5 (default)",
+      "  * grok-4.4-fast",
+      "  * grok-4.4-fast",
+      "",
+    ].join("\n"),
+    stderr: "",
+  });
+  const grok = (await service.discover()).find((record) => record.id === "grok");
+  assert.equal(grok.status, "cli");
+  assert.equal(grok.version, "grok 1.0.0 (abc123) [stable]");
+  assert.equal(grok.authStatus, "authenticated");
+  assert.deepEqual(grok.models, ["default", "grok-4.5", "grok-4.4-fast"]);
+  assert.equal(
+    calls.filter((call) => call.file === grokPath && call.args[0] === "models").length,
+    2
+  );
+});
+
+test("grok models가 성공 종료해도 미인증 문구를 놓치지 않는다", async () => {
+  const { service } = makeGrokService({
+    ok: true,
+    stdout: [
+      "You are not authenticated.",
+      "",
+      "Default model: grok-4.5",
+      "",
+      "Available models:",
+      "  * grok-4.5 (default)",
+    ].join("\n"),
+    stderr: "",
+  });
+  const grok = (await service.discover()).find((record) => record.id === "grok");
+  assert.equal(grok.authStatus, "unauthenticated");
+  assert.match(grok.authReason, /로그인/);
+  assert.deepEqual(grok.models, ["default", "grok-4.5"]);
+});
+
+test("grok 인증 프로브의 알 수 없는 출력은 로그인 완료로 추정하지 않는다", async () => {
+  const { service } = makeGrokService({
+    ok: true,
+    stdout: "Default model: grok-4.5\nAvailable models:\n  * grok-4.5 (default)\n",
+    stderr: "",
+  });
+  const grok = (await service.discover()).find((record) => record.id === "grok");
+  assert.equal(grok.authStatus, "unknown");
+  assert.match(grok.authReason, /확인하지 못했습니다/);
+});
+
+test("Docker Linux 백엔드가 확인된 경우에만 Grok 읽기와 승인형 쓰기를 승격한다", async () => {
+  const modelsResult = {
+    ok: true,
+    stdout: "You are logged in with grok.com.\nAvailable models:\n  * grok-4.5 (default)\n",
+    stderr: "",
+  };
+  const available = makeGrokService(modelsResult, {
+    grokDockerProbe: async () => ({ available: true, version: "29.6.2" }),
+  });
+  const grok = (await available.service.discover()).find((record) => record.id === "grok");
+  assert.deepEqual(grok.permissions["workspace-read"], { supported: true, enforcement: "container" });
+  assert.deepEqual(grok.permissions["workspace-write"], {
+    supported: true,
+    enforcement: "container-copy-approval",
+  });
+
+  const unavailable = makeGrokService(modelsResult, {
+    grokDockerProbe: async () => ({ available: false, reason: "Docker Desktop이 실행 중이 아닙니다." }),
+  });
+  const blocked = (await unavailable.service.discover()).find((record) => record.id === "grok");
+  assert.equal(blocked.permissions["workspace-read"].supported, false);
+  assert.equal(blocked.permissions["workspace-write"].supported, false);
+  assert.match(blocked.permissions["workspace-read"].reason, /Docker Desktop/);
 });
 
 test("GUI 흔적 경로는 Antigravity.exe를 가리키지만 실행 후보에는 없다", () => {
@@ -68,7 +196,7 @@ test("GUI 흔적 경로는 Antigravity.exe를 가리키지만 실행 후보에�
 
 test("CLI 없음 + GUI 설치 → gui-only 상태와 설치 안내", async () => {
   const files = new Set([
-    path.join(WIN_ENV.LOCALAPPDATA, "Programs", "antigravity", "Antigravity.exe"),
+    path.win32.join(WIN_ENV.LOCALAPPDATA, "Programs", "antigravity", "Antigravity.exe"),
   ]);
   const { service } = makeService({ files });
   const records = await service.discover();
@@ -243,7 +371,7 @@ test("Codex app-server 카탈로그를 공개 모델과 모델별 노력 목록�
 });
 
 test("agy CLI가 공식 후보 경로에 있으면 PATH 없이도 cli 상태가 된다", async () => {
-  const agyPath = path.join(WIN_ENV.LOCALAPPDATA, "agy", "bin", "agy.exe");
+  const agyPath = path.win32.join(WIN_ENV.LOCALAPPDATA, "agy", "bin", "agy.exe");
   const files = new Set([agyPath]);
   const { service, calls } = makeService({
     files,
@@ -258,7 +386,7 @@ test("agy CLI가 공식 후보 경로에 있으면 PATH 없이도 cli 상태가 
 });
 
 test("agy 모델 목록은 `agy models` 프로브로 갱신된다", async () => {
-  const agyPath = path.join(WIN_ENV.LOCALAPPDATA, "agy", "bin", "agy.exe");
+  const agyPath = path.win32.join(WIN_ENV.LOCALAPPDATA, "agy", "bin", "agy.exe");
   const files = new Set([agyPath]);
   const cacheStore = {};
   const service = createCapabilityService({

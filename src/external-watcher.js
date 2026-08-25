@@ -3,11 +3,19 @@ const path = require("node:path");
 const { EventEmitter } = require("node:events");
 
 const MAX_RECENT_EVENTS = 1200;
+const MAX_ACCUMULATED_MESSAGE_CHARS = 4000;
 
 function text(value, limit = 280) {
   if (value === null || value === undefined) return "";
   const source = typeof value === "string" ? value : String(value);
   return source.replace(/\s+/g, " ").trim().slice(0, limit);
+}
+
+function appendMessage(previous, chunk) {
+  const combined = `${previous || ""}${chunk || ""}`;
+  return combined.length > MAX_ACCUMULATED_MESSAGE_CHARS
+    ? combined.slice(-MAX_ACCUMULATED_MESSAGE_CHARS)
+    : combined;
 }
 
 function readBytes(file, offset, size) {
@@ -169,7 +177,7 @@ class ExternalWatcher extends EventEmitter {
 
     let session = this.sessions.get(id);
     if (!session) {
-      session = { id, lastAt: now, cwd: event.cwd || null, lastMessage: "" };
+      session = { id, lastAt: now, cwd: event.cwd || null, lastMessage: "", userMessage: "" };
       this.sessions.set(id, session);
       this.emit("working-changed", true, null, {
         threadId: id,
@@ -181,10 +189,20 @@ class ExternalWatcher extends EventEmitter {
     session.lastAt = now;
     session.cwd ||= event.cwd || null;
     const context = { threadId: id, cwd: session.cwd, provider: this.provider };
-    if (event.type === "user") this.emit("user-message", text(event.text), context);
+    if (event.type === "user") {
+      session.userMessage = event.append
+        ? appendMessage(session.userMessage, event.text)
+        : String(event.text || "");
+      this.emit("user-message", text(session.userMessage), context);
+    }
     if (event.type === "assistant") {
-      session.lastMessage = text(event.text);
-      this.emit("agent-message", session.lastMessage, context);
+      session.lastMessage = event.append
+        ? appendMessage(session.lastMessage, event.text)
+        : String(event.text || "");
+      const visible = event.append
+        ? text(session.lastMessage.slice(-280))
+        : text(session.lastMessage);
+      this.emit("agent-message", visible, context);
     }
     if (event.type === "tool") {
       this.emit(
@@ -193,7 +211,7 @@ class ExternalWatcher extends EventEmitter {
         context
       );
     }
-    if (event.finished) this.finish(id, "done", event.text);
+    if (event.finished) this.finish(id, event.reason || "done", event.text);
   }
 
   finish(id, reason, message = "") {
@@ -247,4 +265,5 @@ module.exports = {
   readBytes,
   splitCompleteLines,
   text,
+  appendMessage,
 };

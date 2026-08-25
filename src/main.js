@@ -3,10 +3,21 @@ const { spawn, spawnSync, execFile } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { prepareX11Relaunch } = require("./linux-window-backend");
+
+// Wayland는 일반 앱의 절대 위치 이동을 허용하지 않아 데스크톱 펫의
+// 자동 보행과 always-on-top 계약을 지킬 수 없습니다. XWayland가 있는
+// Linux Wayland 세션에서는 사용자가 백엔드를 명시하지 않은 경우만 X11로
+// 한 번 재실행합니다. Ozone 백엔드는 main.js가 실행되기 전에 고르므로
+// app.commandLine.appendSwitch로는 너무 늦습니다.
+const relaunchingForX11 = prepareX11Relaunch(app);
 const { CodexAccountSwitcher } = require("./codex-account-switcher");
 const { CodexWatcher } = require("./codex-watcher");
 const { AntigravityWatcher } = require("./antigravity-watcher");
 const { ClaudeWatcher } = require("./claude-watcher");
+const { GrokWatcher } = require("./grok-watcher");
+const { GrokAccountSwitcher } = require("./grok-account-switcher");
+const { GrokDockerRuntime } = require("./grok-docker-runtime");
 const { ClaudeAccountSwitcher } = require("./claude-account-switcher");
 const { normalizeClaudeAccountMetadata } = require("./claude-account-metadata");
 const { AntigravityAccountSwitcher } = require("./antigravity-account-switcher");
@@ -15,6 +26,7 @@ const {
   fetchAntigravityIdentity,
   fetchClaudeUsage,
   fetchAntigravityUsage,
+  readGrokUsage,
 } = require("./provider-usage");
 const { deleteCredential, readCredential, writeCredential } = require("./credential-store");
 const { createClaudeLiveStore } = require("./claude-live-credentials");
@@ -34,6 +46,11 @@ const { normalizeFontFamily, normalizeFontSize } = require("./appearance-setting
 const { buildAccountSubmenu } = require("./account-submenu");
 const { rateWindowLabel } = require("./codex-usage-label");
 const { commandNeedsShell, selectCommandPath } = require("./command-resolution");
+const {
+  cliCandidates,
+  parseGrokAuthStatus,
+  parseGrokModels,
+} = require("./providers/provider-capabilities");
 const { createChatFeature } = require("./chat/chat-ipc");
 const { buildWindowsCodexLaunchScript } = require("./codex-desktop-launch");
 const { getInstalledFonts } = require("./installed-fonts");
@@ -454,11 +471,14 @@ const BUBBLE_CONFIG = Object.freeze({
 
 let petWindow = null;
 let settingsWindow = null;
+const grokDockerRuntime = new GrokDockerRuntime();
 // 채팅 기능은 창·세션·IPC·프로세스 실행을 chat/chat-ipc.js가 조립합니다.
 const chatFeature = createChatFeature({
   electron: { ipcMain, dialog, BrowserWindow, shell },
   onWindowReady: () => sendAppearanceToWindows(),
+  openSettings: () => openSettingsWindow(),
   prepareAgent: ({ agent }) => prepareChatAgent(agent),
+  grokDockerRuntime,
 });
 let movementTimer = null;
 let phaseTimer = null;
@@ -697,9 +717,11 @@ codexAccountSwitcher.ensureCurrentAccountProfile();
 const codexWatcher = new CodexWatcher();
 const antigravityWatcher = new AntigravityWatcher();
 const claudeWatcher = new ClaudeWatcher();
+const grokWatcher = new GrokWatcher();
 // macOS에서는 Claude Code live 자격 증명이 Keychain에 있으므로 플랫폼 저장소를 주입합니다.
 const claudeLiveStore = createClaudeLiveStore();
 const claudeAccountSwitcher = new ClaudeAccountSwitcher({ liveStore: claudeLiveStore });
+const grokAccountSwitcher = new GrokAccountSwitcher();
 const antigravityAccountSwitcher = new AntigravityAccountSwitcher({
   read: async () => JSON.parse(await readCredential("gemini:antigravity")),
   write: async (value) => writeCredential("gemini:antigravity", value),
@@ -1185,7 +1207,7 @@ function playManualReaction(stateName) {
 }
 
 function isAnyProviderWorking() {
-  return codexWatcher.working || antigravityWatcher.working || claudeWatcher.working;
+  return codexWatcher.working || antigravityWatcher.working || claudeWatcher.working || grokWatcher.working;
 }
 
 // 수동 Pause/Resume 메뉴 항목에서 자동 이동을 토글합니다.
@@ -1560,6 +1582,10 @@ function codexCommandCandidates() {
   ];
 }
 
+function grokCommandCandidates() {
+  return cliCandidates("grok", process.platform, process.env, os.homedir());
+}
+
 function resolveAntigravityExecutable() {
   if (process.platform === "darwin") {
     const appPath = "/Applications/Antigravity.app";
@@ -1671,6 +1697,82 @@ function writeClaudeLoginScript() {
     "utf8"
   );
   return scriptPath;
+}
+
+function writeGrokLoginScript() {
+  const grokCommand = resolveCommand("grok", grokCommandCandidates());
+  if (!grokCommand) throw new Error("Grok 명령을 찾지 못했습니다.");
+
+  if (["darwin", "linux"].includes(process.platform)) {
+    const fileName = process.platform === "darwin"
+      ? "codepet-grok-login.command"
+      : "codepet-grok-login.sh";
+    return writeMacLoginScript(fileName, [
+      'echo "CodePet Grok Login"',
+      `${quoteShellArgument(grokCommand)} login`,
+    ]);
+  }
+
+  const scriptPath = path.join(app.getPath("userData"), "codepet-grok-login.cmd");
+  fs.writeFileSync(
+    scriptPath,
+    [
+      "@echo off",
+      "title CodePet Grok Login",
+      `call ${quoteCmdArgument(grokCommand)} login`,
+      "echo.",
+      "pause",
+      "",
+    ].join("\r\n"),
+    "utf8"
+  );
+  return scriptPath;
+}
+
+async function startGrokDockerLogin() {
+  if (process.platform !== "win32") {
+    await grokDockerRuntime.ensureReady();
+    appendDebugLog("Grok Docker auth synchronized from host login");
+    return true;
+  }
+  const scriptPath = await grokDockerRuntime.prepareLoginScript(app.getPath("userData"));
+  appendDebugLog(`Grok Docker login terminal requested: ${scriptPath}`);
+  const error = await openLoginScript(scriptPath);
+  if (error) throw new Error(error);
+  return true;
+}
+
+function getGrokStatus() {
+  return new Promise((resolve, reject) => {
+    const command = resolveCommand("grok", grokCommandCandidates());
+    if (!command) {
+      reject(new Error("Grok 명령을 찾지 못했습니다."));
+      return;
+    }
+    execFile(
+      command,
+      ["models"],
+      {
+        encoding: "utf8",
+        windowsHide: true,
+        timeout: 8000,
+        maxBuffer: 1024 * 1024,
+        shell: commandNeedsShell(command, process.platform),
+      },
+      (error, stdout, stderr) => {
+        const output = `${stdout || ""}\n${stderr || ""}`;
+        const authStatus = parseGrokAuthStatus(output);
+        if (error && authStatus === "unknown") {
+          reject(new Error("Grok 로그인 상태를 확인하지 못했습니다."));
+          return;
+        }
+        resolve({
+          authStatus,
+          models: parseGrokModels(output) || [],
+        });
+      }
+    );
+  });
 }
 
 function getClaudeAuthStatus() {
@@ -1913,6 +2015,10 @@ async function switchCodexAccount(profileKey) {
     try {
       const result = codexAccountSwitcher.switchToProfile(profileKey);
       invalidateProxyAccountsCache();
+      // WebSocket 인증은 handshake 시점에 고정됩니다. B 프로필과 계정 캐시를
+      // 먼저 확정한 뒤 기존 터널만 끊어, Codex의 자동 재연결이 B로 handshake하게 합니다.
+      const disconnectedTunnels = codexProxy.disconnectWebSocketTunnels("account-switch");
+      appendDebugLog(`codex account switch disconnected ${disconnectedTunnels} websocket tunnel(s)`);
       refreshTrayMenu();
       showCodexAccountBubble(
         `"${result.profile.label}" 계정으로 전환했습니다.\n프록시 모드: 재시작 없이 다음 요청부터 바로 적용됩니다.`
@@ -2097,6 +2203,9 @@ function quitApp() {
   stopMovementLoop();
   clearTimeout(bubbleHideTimer);
   codexWatcher.stop();
+  antigravityWatcher.stop();
+  claudeWatcher.stop();
+  grokWatcher.stop();
 
   if (tray) {
     tray.destroy();
@@ -2502,7 +2611,7 @@ async function openCodexThread(threadId) {
 }
 
 function restoreActiveActivityBubble() {
-  if (!codexWatcher.working || activeActivityBubbles.size === 0) {
+  if (!isAnyProviderWorking() || activeActivityBubbles.size === 0) {
     hideBubble();
     return;
   }
@@ -2885,7 +2994,14 @@ function maybeWarnUsage(usage) {
 
 async function switchProviderAccount(provider, profileKey) {
   if (provider === "codex") return switchCodexAccount(profileKey);
-  const switcher = provider === "agy" ? antigravityAccountSwitcher : claudeAccountSwitcher;
+  const switcher = provider === "agy"
+    ? antigravityAccountSwitcher
+    : provider === "claude"
+      ? claudeAccountSwitcher
+      : provider === "grok"
+        ? grokAccountSwitcher
+        : null;
+  if (!switcher) throw new Error("지원하지 않는 계정 유형입니다.");
   await switcher.switchToProfile(profileKey);
   clearUsageCache(provider);
   refreshTrayMenu();
@@ -2902,6 +3018,8 @@ function deleteProviderAccount(provider, profileKey) {
       ? antigravityAccountSwitcher
       : provider === "claude"
         ? claudeAccountSwitcher
+        : provider === "grok"
+          ? grokAccountSwitcher
         : null;
   if (!switcher) throw new Error("지원하지 않는 계정 유형입니다.");
   const deleted = switcher.deleteProfile(profileKey);
@@ -2956,6 +3074,14 @@ async function startProviderLogin(provider) {
     return true;
   }
 
+  if (provider === "grok") {
+    grokAccountSwitcher.prepareLogin();
+    const scriptPath = writeGrokLoginScript();
+    const error = await openLoginScript(scriptPath);
+    if (error) throw new Error(error);
+    return true;
+  }
+
   throw new Error("지원하지 않는 계정 유형입니다.");
 }
 
@@ -2987,6 +3113,7 @@ function buildProviderAccountSubmenu() {
     { label: "Codex", submenu: buildCodexAccountSubmenu() },
     { label: "AGY", submenu: buildSimpleProviderSubmenu(antigravityAccountSwitcher, "agy", "AGY") },
     { label: "Claude", submenu: buildSimpleProviderSubmenu(claudeAccountSwitcher, "claude", "Claude") },
+    { label: "Grok", submenu: buildSimpleProviderSubmenu(grokAccountSwitcher, "grok", "Grok") },
   ];
 }
 
@@ -3401,7 +3528,14 @@ function registerIpcHandlers() {
       const action = input?.action;
       let succeeded = false;
 
-      if (["agy", "claude"].includes(input?.provider)) {
+      if (input?.provider === "grok" && action === "docker-login") {
+        succeeded = await startGrokDockerLogin();
+        return succeeded
+          ? { ok: true, data: await getSettingsData() }
+          : { ok: false, error: "Docker Grok 로그인 창을 열지 못했습니다." };
+      }
+
+      if (["agy", "claude", "grok"].includes(input?.provider)) {
         if (action === "login") succeeded = await startProviderLogin(input.provider);
         else if (action === "switch" && typeof input.profileKey === "string") succeeded = await switchProviderAccount(input.provider, input.profileKey);
         else if (action === "delete" && typeof input.profileKey === "string") succeeded = Boolean(deleteProviderAccount(input.provider, input.profileKey));
@@ -3459,7 +3593,7 @@ function registerIpcHandlers() {
 }
 
 // 앱 수명주기 진입점입니다.
-app.whenReady().then(() => {
+if (!relaunchingForX11) app.whenReady().then(() => {
   // macOS에서는 데스크톱 펫이 Dock에 남아 있을 이유가 없어 메뉴바(트레이)로만 동작하게 합니다.
   if (process.platform === "darwin" && app.dock) {
     app.dock.hide();
@@ -3469,6 +3603,7 @@ app.whenReady().then(() => {
   registerCodexWatcher();
   registerExternalWatcher(antigravityWatcher, "AGY");
   registerExternalWatcher(claudeWatcher, "Claude");
+  registerExternalWatcher(grokWatcher, "Grok");
   createTray();
   createWindow();
   createBubbleWindow();
@@ -3483,6 +3618,7 @@ app.whenReady().then(() => {
   codexWatcher.start();
   antigravityWatcher.start();
   claudeWatcher.start();
+  grokWatcher.start();
   codexProxyStartupPromise = restoreCodexProxyMode();
   void codexProxyStartupPromise;
 
@@ -3508,6 +3644,7 @@ app.on("window-all-closed", () => {
   codexWatcher.stop();
   antigravityWatcher.stop();
   claudeWatcher.stop();
+  grokWatcher.stop();
 
   // 트레이에 남아 있어야 하는 일반 닫힘과, "완전 종료"를 명확히 분리합니다.
   if (isQuitting) {
@@ -3638,13 +3775,79 @@ async function loadClaudeProvider(forceUsage) {
   return { accounts: claudeAccountSwitcher.listProfiles(), usage };
 }
 
+async function loadGrokProvider() {
+  let dockerRead;
+  try {
+    dockerRead = await grokDockerRuntime.status();
+  } catch (error) {
+    dockerRead = {
+      available: false,
+      setupReady: false,
+      authenticated: false,
+      loginMode: process.platform === "win32" ? "interactive" : "host-sync",
+      reason: error?.message || "Docker Grok 상태를 확인하지 못했습니다.",
+    };
+  }
+  let status;
+  try {
+    status = await getGrokStatus();
+  } catch {
+    return {
+      accounts: grokAccountSwitcher.listProfiles(),
+      usage: { id: "grok", label: "Grok", error: "CLI 설치 또는 상태 확인 필요", gauges: [] },
+      dockerRead,
+    };
+  }
+
+  let usageData = null;
+  if (status.authStatus === "authenticated") {
+    try {
+      usageData = readGrokUsage();
+    } catch {
+      // Grok CLI가 billing 로그를 남기지 못해도 계정 전환 기능은 유지합니다.
+    }
+  }
+  if (status.authStatus === "authenticated") {
+    try {
+      grokAccountSwitcher.snapshotCurrent({ plan: usageData?.plan });
+    } catch {
+      // XAI_API_KEY나 외부 인증처럼 auth.json에 저장되지 않는 인증은 상태 행으로만 표시합니다.
+    }
+  }
+  let accounts = grokAccountSwitcher.listProfiles();
+  if (status.authStatus === "authenticated" && !accounts.some((account) => account.active)) {
+    accounts = [{
+      key: "grok-live",
+      label: "Grok 환경 인증",
+      active: true,
+      email: null,
+      plan: usageData?.plan || "외부 인증",
+      hasAuth: true,
+    }, ...accounts];
+  }
+
+  const usageError = status.authStatus === "authenticated"
+    ? "Grok 한도 조회 불가"
+    : status.authStatus === "unauthenticated"
+      ? "로그인 필요"
+      : "로그인 상태 확인 불가";
+  return {
+    accounts,
+    dockerRead,
+    usage: usageData
+      ? { id: "grok", label: "Grok", gauges: usageData.gauges }
+      : { id: "grok", label: "Grok", error: usageError, gauges: [] },
+  };
+}
+
 async function getSettingsData({ forceUsage = false } = {}) {
   const settings = readSettings();
   const pets = listAvailablePets();
-  const [codexUsage, agy, claude] = await Promise.all([
+  const [codexUsage, agy, claude, grok] = await Promise.all([
     loadCodexUsage(),
     loadAntigravityProvider(forceUsage),
     loadClaudeProvider(forceUsage),
+    loadGrokProvider(),
   ]);
   const codexAccounts = codexAccountRows();
 
@@ -3664,8 +3867,9 @@ async function getSettingsData({ forceUsage = false } = {}) {
       { id: "codex", label: "Codex", accounts: codexAccounts },
       { id: "agy", label: "AGY", accounts: agy.accounts },
       { id: "claude", label: "Claude", accounts: claude.accounts },
+      { id: "grok", label: "Grok", accounts: grok.accounts, dockerRead: grok.dockerRead },
     ],
-    usage: [codexUsage, agy.usage, claude.usage],
+    usage: [codexUsage, agy.usage, claude.usage, grok.usage],
   };
 }
 

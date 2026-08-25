@@ -89,6 +89,31 @@ test("찢긴 JSONL 마지막 줄은 버리고 나머지를 복구한다", () => 
   assert.deepEqual(messages.map((m) => m.id), ["m1", "m2"]);
 });
 
+test("Grok 메시지와 실행 메타는 기존 세션 스키마로 왕복한다", () => {
+  const store = makeStore();
+  const meta = store.createSession({ title: "Grok 대화" });
+  store.appendEvent(meta.id, {
+    kind: "message",
+    message: {
+      id: "g1",
+      ts: 123,
+      authorType: "agent",
+      author: "grok",
+      text: "Grok 응답",
+      agentMeta: { model: "grok-4.5", effort: "medium", version: "grok 1.0.0" },
+    },
+  });
+
+  const [message] = new ChatStore({ root: store.root }).init().readMessages(meta.id);
+  assert.equal(message.author, "grok");
+  assert.equal(message.text, "Grok 응답");
+  assert.deepEqual(message.agentMeta, {
+    model: "grok-4.5",
+    effort: "medium",
+    version: "grok 1.0.0",
+  });
+});
+
 test("index.json이 깨지면 메타에서 재구축한다", () => {
   const store = makeStore();
   const a = store.createSession({ title: "A" });

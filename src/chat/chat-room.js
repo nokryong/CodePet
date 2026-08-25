@@ -15,11 +15,49 @@ const { extractEmoticons } = require("./chat-emoticons");
 //   총 실행 예산 두 가지 상한 아래에서만 진행됩니다.
 const DEFAULT_DISCUSSION_RUN_BUDGET = 9;
 const DEFAULT_MENTION_CHAIN_LIMIT = 2;
+const REPLY_EXCERPT_LIMIT = 200;
 
 let messageSeq = 0;
 function nextMessageId() {
   messageSeq += 1;
   return `m${Date.now()}-${messageSeq}`;
+}
+
+function cleanReplyField(value, limit) {
+  if (typeof value !== "string") return "";
+  return value.trim().slice(0, limit);
+}
+
+function sanitizeReplyTo(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const messageId = cleanReplyField(value.messageId, 160);
+  const author = cleanReplyField(value.author, 80);
+  const authorType = value.authorType === "user" || value.authorType === "agent"
+    ? value.authorType
+    : "";
+  const excerpt = typeof value.excerpt === "string"
+    ? value.excerpt.replace(/\s+/gu, " ").trim().slice(0, REPLY_EXCERPT_LIMIT)
+    : "";
+  if (!messageId || !author || !authorType || !excerpt) return null;
+  return { messageId, author, authorType, excerpt };
+}
+
+// 실패 결과를 항상 설명 가능한 문장으로 정규화합니다.
+// 우선순위: 명시적 error → 승인 관련 전용 문구 + 실제 원인(detail→summary)
+// → 내부 오류 식별자. 어떤 경로로도 "알 수 없는 오류"만 남기지 않습니다.
+function describeRunFailure(result, { autoApprove = false, approvedRetry = false } = {}) {
+  const explicit = String(result?.error || "").trim();
+  if (explicit) return explicit;
+  if (result?.approvalRequired) {
+    const approval = result.approval || {};
+    const cause =
+      String(approval.detail || approval.summary || "").trim().slice(0, 600) ||
+      "원인이 기록되지 않았습니다";
+    if (approvedRetry) return `승인 후 재시도에도 권한을 획득하지 못했습니다: ${cause}`;
+    if (autoApprove) return `자동 승인으로 실행했지만 권한 요청이 다시 발생했습니다: ${cause}`;
+    return `권한 요청이 처리되지 않았습니다: ${cause}`;
+  }
+  return "실행이 실패했지만 원인이 기록되지 않았습니다. (내부 오류: run-result-unexplained)";
 }
 
 class ChatRoom extends EventEmitter {
@@ -51,6 +89,7 @@ class ChatRoom extends EventEmitter {
     this.turnQueue = [];
     this.deferredTurnQueue = [];
     this.pendingTurns = new Map();
+    this.broadcastPositions = new Map();
     this.turnActive = false;
     this.currentTurn = null;
     // 사용자가 "잠깐"으로 개입하면 다음 사용자 발화 전까지 에이전트발
@@ -125,6 +164,7 @@ class ChatRoom extends EventEmitter {
     const payload = typeof input === "string" ? { text: input } : input || {};
     const trimmed = String(payload.text || "").trim();
     const attachments = Array.isArray(payload.attachments) ? payload.attachments : [];
+    const replyTo = sanitizeReplyTo(payload.replyTo);
     if (!trimmed && attachments.length === 0) return null;
 
     const entry = this.appendMessage({
@@ -132,6 +172,7 @@ class ChatRoom extends EventEmitter {
       author: "user",
       text: trimmed,
       ...(attachments.length > 0 ? { attachments } : {}),
+      ...(replyTo ? { replyTo } : {}),
     });
 
     this.mentionsMuted = false;
@@ -155,7 +196,10 @@ class ChatRoom extends EventEmitter {
     }
 
     if (respondents.length > 0) {
-      const order = respondents.length > 1 ? this.shuffle(respondents) : respondents;
+      const hasMentions = mentionedIds.length > 0;
+      const order = hasMentions
+        ? respondents
+        : respondents.length > 1 ? this.shuffle(respondents) : respondents;
       order.forEach((agent, index) => {
         this.scheduleResponse(agent, {
           attachments,
@@ -163,7 +207,7 @@ class ChatRoom extends EventEmitter {
           ...(order.length > 1
             ? { broadcast: { position: index + 1, total: order.length } }
             : {}),
-        });
+        }, hasMentions ? { priorityIndex: index } : {});
       });
     }
     return entry;
@@ -203,13 +247,29 @@ class ChatRoom extends EventEmitter {
 
   // 방 전체 단일 턴 큐. 일반 응답과 멘션 호출은 대기 중인 같은 에이전트의
   // 턴을 공유해, 한 릴레이에서 같은 발언권이 중복 예약되지 않게 합니다.
-  scheduleResponse(agent, context = {}) {
+  scheduleResponse(agent, context = {}, options = {}) {
     const generation = this.generation;
     const dedupeKey = context.discussion || !context.turnRootId
       ? null
       : `${context.turnRootId}:${agent.id}`;
     if (dedupeKey && this.pendingTurns.has(dedupeKey)) {
-      return this.pendingTurns.get(dedupeKey).promise;
+      const pending = this.pendingTurns.get(dedupeKey);
+      const queueIndex = this.turnQueue.indexOf(pending);
+      const isMention = Number.isInteger(context.mentionDepth) && context.mentionDepth > 0;
+      if (isMention && queueIndex >= 0) {
+        pending.context = {
+          ...pending.context,
+          ...context,
+          turnRootId: pending.context.turnRootId,
+        };
+        if (Number.isInteger(options.priorityIndex)) {
+          this.turnQueue.splice(queueIndex, 1);
+          const priorityIndex = Math.max(0, Math.min(options.priorityIndex, this.turnQueue.length));
+          this.turnQueue.splice(priorityIndex, 0, pending);
+        }
+        this.emitTurnState();
+      }
+      return pending.promise;
     }
 
     let resolveTurn;
@@ -230,7 +290,12 @@ class ChatRoom extends EventEmitter {
     const queue = this.discussionActive && !context.discussion
       ? this.deferredTurnQueue
       : this.turnQueue;
-    queue.push(item);
+    if (queue === this.turnQueue && Number.isInteger(options.priorityIndex)) {
+      const priorityIndex = Math.max(0, Math.min(options.priorityIndex, queue.length));
+      queue.splice(priorityIndex, 0, item);
+    } else {
+      queue.push(item);
+    }
     this.emitTurnState();
     this.pumpTurnQueue();
     return promise;
@@ -308,6 +373,13 @@ class ChatRoom extends EventEmitter {
           outcome = undefined;
         }
         this.currentTurn = null;
+        const broadcastRootId = item.context.broadcast && item.context.turnRootId;
+        if (broadcastRootId) {
+          const hasRemainingBroadcastTurn = [...this.turnQueue, ...this.deferredTurnQueue]
+            .some((queued) => queued.context.broadcast
+              && queued.context.turnRootId === broadcastRootId);
+          if (!hasRemainingBroadcastTurn) this.broadcastPositions.delete(broadcastRootId);
+        }
         this.emitTurnState();
         item.resolve(outcome);
       }
@@ -366,6 +438,12 @@ class ChatRoom extends EventEmitter {
     agent = currentAgent;
 
     const mentionDepth = context.mentionDepth || 0;
+    let broadcast = context.broadcast || null;
+    if (broadcast && context.turnRootId) {
+      const position = (this.broadcastPositions.get(context.turnRootId) || 0) + 1;
+      this.broadcastPositions.set(context.turnRootId, position);
+      broadcast = { ...broadcast, position };
+    }
 
     const prompt = buildAgentPrompt({
       agent,
@@ -374,7 +452,7 @@ class ChatRoom extends EventEmitter {
       maxMessages: this.maxPromptMessages,
       permissionMode: this.meta.permissionMode,
       discussion: context.discussion || null,
-      broadcast: context.broadcast || null,
+      broadcast,
       mentionsEnabled: !context.discussion && mentionDepth < this.mentionChainLimit,
     });
 
@@ -432,12 +510,20 @@ class ChatRoom extends EventEmitter {
     if (generation !== this.generation || result?.cancelled) return;
 
     if (!result?.ok) {
+      // 진단 기록에 자동 승인/재시도 맥락을 더해 transcript에 함께 저장합니다.
+      const diagnostics = result?.diagnostics
+        ? { ...result.diagnostics, autoApprove: Boolean(agent.autoApprove), approvedRetry }
+        : null;
       this.appendMessage({
         authorType: "agent",
         author: agent.id,
-        text: result?.error || "알 수 없는 오류",
+        text: describeRunFailure(result, {
+          autoApprove: Boolean(agent.autoApprove),
+          approvedRetry,
+        }),
         error: true,
         runId,
+        ...(diagnostics ? { diagnostics } : {}),
       });
       return { ok: false };
     }
@@ -450,7 +536,7 @@ class ChatRoom extends EventEmitter {
       if (match) rawText = rawText.slice(0, match.index).trim();
     }
 
-    const extracted = extractEmoticons(rawText);
+    const extracted = extractEmoticons(rawText, undefined, agent.id);
     let text = extracted.text;
     const emoticons = extracted.emoticons;
     if (context.discussion) {
@@ -474,6 +560,7 @@ class ChatRoom extends EventEmitter {
       ...(emoticons.length > 0 ? { emoticons } : {}),
       ...(emoticons.length > 0 ? { contentParts: extracted.parts } : {}),
       ...(result.deliveries ? { deliveries: result.deliveries } : {}),
+      ...(result.workspaceChangeSet ? { workspaceChangeSet: result.workspaceChangeSet } : {}),
     });
     // 토론 모드는 자체 턴 오케스트레이션이 있으므로 멘션 호출을 만들지 않습니다.
     if (!context.discussion) {
@@ -495,10 +582,16 @@ class ChatRoom extends EventEmitter {
     if (this.mentionsMuted) return;
     if (depth >= this.mentionChainLimit) return;
     const mentionedIds = parseMentions(text, this.agents).filter((id) => id !== agent.id);
+    let priorityIndex = 0;
     for (const agentId of mentionedIds) {
       const target = this.findAgent(agentId);
       if (!target || !target.available || target.enabled === false) continue;
-      this.scheduleResponse(target, { mentionDepth: depth + 1, attachments, turnRootId });
+      this.scheduleResponse(
+        target,
+        { mentionDepth: depth + 1, attachments, turnRootId },
+        { priorityIndex }
+      );
+      priorityIndex += 1;
     }
   }
 
@@ -589,6 +682,7 @@ class ChatRoom extends EventEmitter {
     this.turnQueue = [];
     this.deferredTurnQueue = [];
     this.pendingTurns.clear();
+    this.broadcastPositions.clear();
     this.mentionsMuted = false;
     this.emitTurnState();
     for (const resolve of this.pendingApprovals.values()) resolve(false);
@@ -611,4 +705,4 @@ class ChatRoom extends EventEmitter {
   }
 }
 
-module.exports = { ChatRoom, DEFAULT_DISCUSSION_RUN_BUDGET };
+module.exports = { ChatRoom, describeRunFailure, DEFAULT_DISCUSSION_RUN_BUDGET };

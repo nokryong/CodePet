@@ -1,4 +1,4 @@
-/* global chatMarkdown */
+/* global chatMarkdown, chatClipboard */
 const chatScroll = document.getElementById("chat-scroll");
 const messageList = document.getElementById("message-list");
 const typingRow = document.getElementById("typing-row");
@@ -6,11 +6,21 @@ const agentChips = document.getElementById("agent-chips");
 const composerInput = document.getElementById("composer-input");
 const composerBox = document.getElementById("composer-box");
 const sendButton = document.getElementById("btn-send");
-const stopButton = document.getElementById("btn-stop");
 const attachButton = document.getElementById("btn-attach");
 const mentionPopup = document.getElementById("mention-popup");
 const attachmentRow = document.getElementById("attachment-row");
+const replyPreview = document.getElementById("reply-preview");
+const replyPreviewAuthor = document.getElementById("reply-preview-author");
+const replyPreviewExcerpt = document.getElementById("reply-preview-excerpt");
+const clearReplyButton = document.getElementById("btn-clear-reply");
+const turnQueueBar = document.getElementById("turn-queue-bar");
+const turnCurrent = document.getElementById("turn-current");
+const turnNextLabel = document.getElementById("turn-next-label");
+const turnQueueList = document.getElementById("turn-queue-list");
+const interjectButton = document.getElementById("btn-interject");
+const clearTurnsButton = document.getElementById("btn-clear-turns");
 const sessionListEl = document.getElementById("session-list");
+const sessionSearchInput = document.getElementById("session-search-input");
 const newSessionButton = document.getElementById("btn-new-session");
 const refreshProvidersButton = document.getElementById("btn-refresh-providers");
 const doctorButton = document.getElementById("btn-doctor");
@@ -20,6 +30,7 @@ const workspaceLabel = document.getElementById("workspace-label");
 const permissionSelect = document.getElementById("permission-select");
 const enforcementHint = document.getElementById("enforcement-hint");
 const discussionButton = document.getElementById("btn-discussion");
+const exportSessionButton = document.getElementById("btn-export-session");
 const storeWarning = document.getElementById("store-warning");
 const popover = document.getElementById("popover");
 const popoverBackdrop = document.getElementById("popover-backdrop");
@@ -52,12 +63,21 @@ const typingAgents = new Set();
 const liveRuns = new Map(); // runId → { item, textEl, statusEl, text }
 let mentionState = null;
 let noticeTimer = null;
+let turnState = { current: null, queue: [], deferred: [] };
+let pendingReplyTo = null;
+let sessionSearchQuery = "";
+let sessionSearchResults = [];
+let sessionSearchLoading = false;
+let sessionSearchFailed = false;
+let sessionSearchTimer = null;
+let sessionSearchRequestId = 0;
 
 const SIDEBAR_WIDTH_KEY = "codepet.chat.sidebarWidth";
 const SIDEBAR_COLLAPSED_KEY = "codepet.chat.sidebarCollapsed";
 const DOCTOR_SEEN_KEY = "codepet.chat.doctorSeen.v1";
 const SIDEBAR_MIN_WIDTH = 180;
 const SIDEBAR_MAX_WIDTH = 420;
+const SESSION_SEARCH_DEBOUNCE_MS = 250;
 
 function clampSidebarWidth(value) {
   const viewportMax = Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, window.innerWidth * 0.46));
@@ -131,7 +151,9 @@ window.addEventListener("resize", () => {
 });
 
 const ENFORCEMENT_LABEL = {
+  "container-copy-approval": "Docker 격리 복제본 · 승인 필요",
   sandbox: "샌드박스",
+  container: "Docker 격리",
   "tool-policy": "도구 정책",
   "prompt-only": "프롬프트 안내만",
   unavailable: "미지원",
@@ -141,12 +163,14 @@ const AGENT_VISUALS = Object.freeze({
   claude: { src: "./chat-assets/claude.png", background: "#f7d9c8" },
   codex: { src: "./chat-assets/gpt.png", background: "#d8f3ea" },
   agy: { src: "./chat-assets/gemini.png", background: "#dceaff" },
+  grok: { src: "./chat-assets/grok.png", background: "#f7e2c6" },
 });
 
 const AGENT_EMOTICON_FOLDERS = Object.freeze({
   claude: "claude",
   codex: "gpt",
   agy: "gemini",
+  grok: "grok",
 });
 
 function safeEmoticonFile(value) {
@@ -371,6 +395,10 @@ async function call(promise) {
 }
 
 // --- 세션 사이드바 ---
+function normalizeSessionSearchQuery(value) {
+  return String(value || "").replace(/\s+/gu, " ").trim();
+}
+
 function formatRelativeTime(ts) {
   if (!ts) return "";
   const diff = Date.now() - ts;
@@ -385,8 +413,87 @@ function baseName(dirPath) {
   return parts[parts.length - 1] || dirPath || "";
 }
 
+function appendHighlightedText(container, value, query) {
+  const text = String(value || "");
+  const needle = normalizeSessionSearchQuery(query);
+  if (!needle) {
+    container.textContent = text;
+    return;
+  }
+
+  const foldedText = text.toLowerCase();
+  const foldedNeedle = needle.toLowerCase();
+  let cursor = 0;
+  let matchIndex = foldedText.indexOf(foldedNeedle);
+  while (matchIndex >= 0) {
+    if (matchIndex > cursor) {
+      container.append(document.createTextNode(text.slice(cursor, matchIndex)));
+    }
+    const mark = document.createElement("mark");
+    mark.textContent = text.slice(matchIndex, matchIndex + needle.length);
+    container.append(mark);
+    cursor = matchIndex + needle.length;
+    matchIndex = foldedText.indexOf(foldedNeedle, cursor);
+  }
+  if (cursor < text.length) container.append(document.createTextNode(text.slice(cursor)));
+}
+
+function renderSessionSearchState(text) {
+  const item = document.createElement("li");
+  item.className = "session-search-state";
+  item.textContent = text;
+  sessionListEl.append(item);
+}
+
+function renderSessionSearchResults() {
+  sessionListEl.setAttribute("aria-label", "세션 검색 결과");
+  sessionListEl.setAttribute("aria-busy", String(sessionSearchLoading));
+  if (sessionSearchLoading) {
+    renderSessionSearchState("검색 중…");
+    return;
+  }
+  if (sessionSearchFailed) {
+    renderSessionSearchState("검색하지 못했습니다.");
+    return;
+  }
+  if (sessionSearchResults.length === 0) {
+    renderSessionSearchState("일치하는 메시지가 없습니다.");
+    return;
+  }
+
+  for (const result of sessionSearchResults) {
+    const item = document.createElement("li");
+    item.className = "session-search-result";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "session-search-result-button";
+    button.addEventListener("click", () => selectSession(result.sessionId));
+
+    const titleLine = document.createElement("span");
+    titleLine.className = "session-search-result-title";
+    const title = document.createElement("strong");
+    title.textContent = result.title || "세션";
+    const time = document.createElement("span");
+    time.textContent = formatRelativeTime(result.ts);
+    titleLine.append(title, time);
+
+    const snippet = document.createElement("span");
+    snippet.className = "session-search-result-snippet";
+    appendHighlightedText(snippet, result.snippet, sessionSearchQuery);
+    button.append(titleLine, snippet);
+    item.append(button);
+    sessionListEl.append(item);
+  }
+}
+
 function renderSessions() {
   sessionListEl.textContent = "";
+  if (sessionSearchQuery) {
+    renderSessionSearchResults();
+    return;
+  }
+  sessionListEl.setAttribute("aria-label", "세션 목록");
+  sessionListEl.removeAttribute("aria-busy");
   for (const entry of sessions) {
     const item = document.createElement("li");
     item.className = "session-item";
@@ -453,7 +560,10 @@ function renderSessions() {
       );
       if (!yes) return;
       const result = await call(window.chatApi.sessionsDelete(entry.id));
-      if (result) applyFullState(result);
+      if (result) {
+        resetSessionSearchState();
+        applyFullState(result);
+      }
     });
     actions.append(renameBtn, deleteBtn);
 
@@ -461,6 +571,50 @@ function renderSessions() {
     sessionListEl.append(item);
   }
 }
+
+function resetSessionSearchState(render = false) {
+  if (sessionSearchTimer) clearTimeout(sessionSearchTimer);
+  sessionSearchTimer = null;
+  sessionSearchRequestId += 1;
+  sessionSearchInput.value = "";
+  sessionSearchQuery = "";
+  sessionSearchResults = [];
+  sessionSearchLoading = false;
+  sessionSearchFailed = false;
+  if (render) renderSessions();
+}
+
+async function runSessionSearch(query, requestId) {
+  const result = await call(window.chatApi.sessionsSearch(query));
+  if (requestId !== sessionSearchRequestId || query !== sessionSearchQuery) return;
+  sessionSearchLoading = false;
+  sessionSearchFailed = !result;
+  sessionSearchResults = Array.isArray(result?.results) ? result.results : [];
+  renderSessions();
+}
+
+sessionSearchInput.addEventListener("input", () => {
+  if (sessionSearchTimer) clearTimeout(sessionSearchTimer);
+  sessionSearchTimer = null;
+  sessionSearchRequestId += 1;
+  sessionSearchQuery = normalizeSessionSearchQuery(sessionSearchInput.value);
+  sessionSearchResults = [];
+  sessionSearchFailed = false;
+  if (!sessionSearchQuery) {
+    sessionSearchLoading = false;
+    renderSessions();
+    return;
+  }
+
+  sessionSearchLoading = true;
+  renderSessions();
+  const query = sessionSearchQuery;
+  const requestId = sessionSearchRequestId;
+  sessionSearchTimer = setTimeout(() => {
+    sessionSearchTimer = null;
+    runSessionSearch(query, requestId);
+  }, SESSION_SEARCH_DEBOUNCE_MS);
+});
 
 function startInlineRename(titleTextEl, sessionId) {
   const current = titleTextEl.textContent;
@@ -499,7 +653,10 @@ function startInlineRename(titleTextEl, sessionId) {
 }
 
 async function selectSession(sessionId) {
-  if (sessionId === activeSessionId) return;
+  if (sessionId === activeSessionId) {
+    resetSessionSearchState(true);
+    return;
+  }
   const result = await call(window.chatApi.sessionsSelect(sessionId));
   if (result) applyFullState(result);
 }
@@ -543,6 +700,7 @@ function renderHeader() {
   discussionButton.title = discussable
     ? "활성 에이전트들이 정해진 라운드만큼 토론합니다"
     : "토론에는 사용 가능한 에이전트가 두 명 이상 필요합니다";
+  exportSessionButton.disabled = !activeSessionId;
 }
 
 // --- 에이전트 칩 + 팝오버 ---
@@ -703,10 +861,15 @@ function openAgentPopover(anchor, agentId) {
     const autoApproveToggle = document.createElement("input");
     autoApproveToggle.type = "checkbox";
     autoApproveToggle.checked = Boolean(config.autoApprove);
-    autoApproveToggle.disabled = !provider.available || sessionMeta?.permissionMode !== "workspace-write";
-    autoApproveToggle.title = autoApproveToggle.disabled
-      ? "워크스페이스 쓰기 권한에서만 사용할 수 있습니다"
-      : "이 에이전트가 요청하는 도구 권한을 개별 확인 없이 승인합니다";
+    const requiresPatchApproval = agentId === "grok" && sessionMeta?.permissionMode === "workspace-write";
+    autoApproveToggle.disabled = !provider.available
+      || sessionMeta?.permissionMode !== "workspace-write"
+      || requiresPatchApproval;
+    autoApproveToggle.title = requiresPatchApproval
+      ? "Grok 변경은 항상 복제본 diff를 검토한 뒤 적용해야 합니다"
+      : autoApproveToggle.disabled
+        ? "워크스페이스 쓰기 권한에서만 사용할 수 있습니다"
+        : "이 에이전트가 요청하는 도구 권한을 개별 확인 없이 승인합니다";
     autoApproveToggle.addEventListener("change", async () => {
       if (autoApproveToggle.checked) {
         const confirmed = window.confirm(
@@ -826,6 +989,14 @@ function renderInlineTokens(container, tokens) {
       const strong = document.createElement("strong");
       strong.textContent = token.text;
       container.append(strong);
+    } else if (token.type === "italic") {
+      const emphasis = document.createElement("em");
+      emphasis.textContent = token.text;
+      container.append(emphasis);
+    } else if (token.type === "strike") {
+      const deleted = document.createElement("del");
+      deleted.textContent = token.text;
+      container.append(deleted);
     } else if (token.type === "link") {
       const anchor = document.createElement("a");
       anchor.href = token.href;
@@ -888,6 +1059,20 @@ function renderRichText(container, text) {
         list.append(item);
       }
       container.append(list);
+    } else if (block.type === "heading") {
+      const level = Math.min(3, Math.max(1, Number(block.level) || 1));
+      const heading = document.createElement(`h${level}`);
+      heading.className = `md-heading md-heading-${level}`;
+      renderInlineTokens(heading, block.tokens);
+      container.append(heading);
+    } else if (block.type === "quote") {
+      const quote = document.createElement("blockquote");
+      quote.className = "md-quote";
+      block.lines.forEach((lineTokens, lineIndex) => {
+        if (lineIndex > 0) quote.append(document.createElement("br"));
+        renderInlineTokens(quote, lineTokens);
+      });
+      container.append(quote);
     } else {
       const paragraph = document.createElement("p");
       paragraph.className = "md-paragraph";
@@ -966,6 +1151,65 @@ function formatTime(ts) {
   return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
 }
 
+const REPLY_EXCERPT_LIMIT = 200;
+
+function makeReplyExcerpt(text) {
+  const normalized = String(text || "").replace(/\s+/gu, " ").trim();
+  if (normalized.length <= REPLY_EXCERPT_LIMIT) return normalized;
+  return `${normalized.slice(0, REPLY_EXCERPT_LIMIT - 1)}…`;
+}
+
+function normalizeReplySnapshot(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const messageId = typeof value.messageId === "string" ? value.messageId.trim().slice(0, 160) : "";
+  const author = typeof value.author === "string" ? value.author.trim().slice(0, 80) : "";
+  const authorType = value.authorType === "user" || value.authorType === "agent"
+    ? value.authorType
+    : "";
+  const excerpt = typeof value.excerpt === "string" ? makeReplyExcerpt(value.excerpt) : "";
+  if (!messageId || !author || !authorType || !excerpt) return null;
+  return { messageId, author, authorType, excerpt };
+}
+
+function replyAuthorLabel(replyTo) {
+  if (replyTo.authorType === "user") return "나";
+  const agent = agentById(replyTo.author);
+  return agent ? `${agent.name} · @${agent.id}` : `@${replyTo.author}`;
+}
+
+function makeReplyContext(replyTo) {
+  const context = document.createElement("aside");
+  context.className = "reply-context";
+  const author = document.createElement("strong");
+  author.textContent = replyAuthorLabel(replyTo);
+  const excerpt = document.createElement("span");
+  excerpt.textContent = replyTo.excerpt;
+  context.append(author, excerpt);
+  return context;
+}
+
+function renderReplyPreview() {
+  replyPreview.hidden = !pendingReplyTo;
+  replyPreviewAuthor.textContent = pendingReplyTo ? `${replyAuthorLabel(pendingReplyTo)}에게 답장` : "";
+  replyPreviewExcerpt.textContent = pendingReplyTo?.excerpt || "";
+}
+
+function clearPendingReply() {
+  pendingReplyTo = null;
+  renderReplyPreview();
+}
+
+function quoteMessage(message) {
+  pendingReplyTo = normalizeReplySnapshot({
+    messageId: message.id,
+    author: message.author,
+    authorType: message.authorType,
+    excerpt: message.text,
+  });
+  renderReplyPreview();
+  if (pendingReplyTo) composerInput.focus();
+}
+
 function isNearBottom() {
   return chatScroll.scrollHeight - chatScroll.scrollTop - chatScroll.clientHeight < 80;
 }
@@ -1014,10 +1258,22 @@ function renderMessage(message) {
   timeEl.textContent = formatTime(message.ts);
   meta.append(nameEl, timeEl);
 
+  if (makeReplyExcerpt(message.text)) {
+    const replyButton = document.createElement("button");
+    replyButton.type = "button";
+    replyButton.className = "message-reply";
+    replyButton.textContent = "인용";
+    replyButton.setAttribute("aria-label", `${name}의 메시지 인용`);
+    replyButton.addEventListener("click", () => quoteMessage(message));
+    meta.append(replyButton);
+  }
+
   const bubble = document.createElement("div");
   bubble.className = "bubble";
+  const replyTo = normalizeReplySnapshot(message.replyTo);
+  if (replyTo) bubble.append(makeReplyContext(replyTo));
   if (message.error) {
-    bubble.textContent = `⚠ ${message.text}`;
+    bubble.append(document.createTextNode(`⚠ ${message.text}`));
   } else if (isUser) {
     renderTextWithMentions(bubble, message.text);
   } else {
@@ -1043,6 +1299,71 @@ function renderMessage(message) {
       badge.textContent = `⚠ 첨부 ${failed.length}개는 이 에이전트에 전달되지 않았습니다`;
       bubble.append(badge);
     }
+  }
+
+  if (message.workspaceChangeSet?.id) {
+    const changeSet = message.workspaceChangeSet;
+    const review = document.createElement("section");
+    review.className = "workspace-change-review";
+    const title = document.createElement("strong");
+    title.textContent = "Docker 격리 복제본 변경 · 적용 승인 필요";
+    const files = document.createElement("ul");
+    for (const change of (changeSet.changes || []).slice(0, 32)) {
+      const row = document.createElement("li");
+      row.textContent = `${change.op === "delete" ? "삭제" : "변경"}: ${change.path}`;
+      files.append(row);
+    }
+    const diff = document.createElement("pre");
+    diff.textContent = changeSet.diff || "표시용 diff가 없습니다. 적용에는 검증된 파일 스냅숏을 사용합니다.";
+    const expiry = document.createElement("small");
+    expiry.className = "workspace-change-expiry";
+    expiry.textContent = changeSet.expiresAt
+      ? `승인 만료: ${formatTime(changeSet.expiresAt)}`
+      : "승인 요청은 15분 뒤 만료됩니다.";
+    const actions = document.createElement("div");
+    actions.className = "workspace-change-actions";
+    const apply = document.createElement("button");
+    apply.type = "button";
+    apply.className = "button button-primary";
+    apply.textContent = "전체 적용";
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "button";
+    cancel.textContent = "취소";
+    const setBusy = (busy) => {
+      apply.disabled = busy;
+      cancel.disabled = busy;
+    };
+    const finish = (text) => {
+      setBusy(true);
+      const status = document.createElement("p");
+      status.className = "workspace-change-status";
+      status.textContent = text;
+      review.append(status);
+    };
+    apply.addEventListener("click", async () => {
+      const sessionId = activeSessionId;
+      setBusy(true);
+      const result = await call(window.chatApi.workspaceChangesApply(sessionId, changeSet.id));
+      if (!result) {
+        setBusy(false);
+        return;
+      }
+      finish(result.cleanupWarning || `${result.applied || 0}개 파일을 적용했습니다.`);
+    });
+    cancel.addEventListener("click", async () => {
+      const sessionId = activeSessionId;
+      setBusy(true);
+      const result = await call(window.chatApi.workspaceChangesCancel(sessionId, changeSet.id));
+      if (!result) {
+        setBusy(false);
+        return;
+      }
+      finish(result.alreadyHandled ? "이미 처리되었거나 만료된 변경입니다." : "복제본 변경을 폐기했습니다.");
+    });
+    actions.append(apply, cancel);
+    review.append(title, files, diff, expiry, actions);
+    bubble.append(review);
   }
 
   body.append(meta, bubble);
@@ -1137,7 +1458,6 @@ function renderTyping() {
   typingRow.textContent = "";
   const active = [...typingAgents].map(agentById).filter(Boolean);
   typingRow.hidden = active.length === 0;
-  stopButton.hidden = active.length === 0;
   for (const agent of active) {
     const pill = document.createElement("span");
     pill.className = "typing-pill";
@@ -1152,6 +1472,80 @@ function renderTyping() {
   scrollToBottom();
 }
 
+// --- 발언 큐 표시와 제어 ---
+function normalizeTurnState(value) {
+  const normalizeQueue = (queue) => Array.isArray(queue)
+    ? queue.filter((turn) =>
+      turn
+      && typeof turn.turnId === "string"
+      && typeof turn.agentId === "string"
+    )
+    : [];
+  return {
+    current: typeof value?.current === "string" ? value.current : null,
+    queue: normalizeQueue(value?.queue),
+    deferred: normalizeQueue(value?.deferred),
+  };
+}
+
+function makeTurnAgentDot(agent) {
+  const dot = document.createElement("span");
+  dot.className = "turn-agent-dot";
+  dot.style.setProperty("--turn-agent-color", agent?.color || "#52525b");
+  dot.setAttribute("aria-hidden", "true");
+  return dot;
+}
+
+function renderTurnQueue() {
+  const currentAgent = turnState.current ? agentById(turnState.current) : null;
+  const waiting = [
+    ...turnState.queue.map((turn) => ({ ...turn, deferred: false })),
+    ...turnState.deferred.map((turn) => ({ ...turn, deferred: true })),
+  ];
+
+  turnCurrent.textContent = "";
+  turnCurrent.hidden = !turnState.current;
+  if (turnState.current) {
+    const label = currentAgent?.name || `@${turnState.current}`;
+    turnCurrent.style.setProperty("--turn-agent-color", currentAgent?.color || "#52525b");
+    turnCurrent.append(makeTurnAgentDot(currentAgent), document.createTextNode(`${label} 발언 중`));
+  }
+
+  turnQueueList.textContent = "";
+  turnQueueList.hidden = waiting.length === 0;
+  turnNextLabel.hidden = waiting.length === 0;
+  for (const turn of waiting) {
+    const agent = agentById(turn.agentId);
+    const agentLabel = `@${agent?.id || turn.agentId}`;
+    const chip = document.createElement("span");
+    chip.className = "turn-queue-chip";
+    chip.setAttribute("role", "listitem");
+    if (turn.deferred) chip.classList.add("is-deferred");
+    chip.title = turn.deferred
+      ? `${agentLabel} · 토론이 끝난 뒤 대기`
+      : `${agentLabel}${turn.discussion ? " · 토론" : ""}`;
+
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "turn-cancel";
+    cancel.textContent = "×";
+    cancel.title = `${agentLabel} 턴 취소`;
+    cancel.setAttribute("aria-label", `${agentLabel} 대기 턴 취소`);
+    cancel.addEventListener("click", async () => {
+      cancel.disabled = true;
+      const result = await call(window.chatApi.turnCancel(activeSessionId, turn.turnId));
+      if (!result) cancel.disabled = false;
+    });
+
+    chip.append(makeTurnAgentDot(agent), document.createTextNode(agentLabel), cancel);
+    turnQueueList.append(chip);
+  }
+
+  interjectButton.hidden = !turnState.current;
+  clearTurnsButton.hidden = waiting.length === 0;
+  turnQueueBar.hidden = !turnState.current && waiting.length === 0;
+}
+
 // --- 첨부 (작성 중) ---
 function renderPendingAttachments() {
   attachmentRow.textContent = "";
@@ -1161,14 +1555,18 @@ function renderPendingAttachments() {
   }
 }
 
-attachButton.addEventListener("click", async () => {
-  const result = await call(window.chatApi.attachmentsAdd(activeSessionId));
+function applyPendingAttachmentResult(result) {
   if (!result) return;
   pendingAttachments = result.pendingAttachments || pendingAttachments;
   for (const failure of result.errors || []) {
     flashNotice(`${failure.name}: ${failure.error}`);
   }
   renderPendingAttachments();
+}
+
+attachButton.addEventListener("click", async () => {
+  const result = await call(window.chatApi.attachmentsAdd(activeSessionId));
+  applyPendingAttachmentResult(result);
 });
 
 composerBox.addEventListener("dragover", (event) => {
@@ -1184,12 +1582,26 @@ composerBox.addEventListener("drop", async (event) => {
     .filter(Boolean);
   if (paths.length === 0) return;
   const result = await call(window.chatApi.attachmentsAddDropped(activeSessionId, paths));
-  if (!result) return;
-  pendingAttachments = result.pendingAttachments || pendingAttachments;
-  for (const failure of result.errors || []) {
+  applyPendingAttachmentResult(result);
+});
+
+composerInput.addEventListener("paste", async (event) => {
+  const files = chatClipboard.clipboardImageFiles(event.clipboardData);
+  if (files.length === 0) return;
+
+  // 이미지가 포함된 붙여넣기만 가로챕니다. 일반 텍스트 붙여넣기는 브라우저 기본 동작을 유지합니다.
+  event.preventDefault();
+  const sessionId = activeSessionId;
+  const serialized = await chatClipboard.serializeClipboardImages(files);
+  for (const failure of serialized.errors) {
     flashNotice(`${failure.name}: ${failure.error}`);
   }
-  renderPendingAttachments();
+  if (serialized.images.length === 0 || !sessionId) return;
+
+  const result = await call(window.chatApi.attachmentsAddPasted(sessionId, serialized.images));
+  // 읽는 동안 세션을 바꿨다면 이전 세션에는 저장하되 현재 화면의 첨부 목록은 덮어쓰지 않습니다.
+  if (sessionId === activeSessionId) applyPendingAttachmentResult(result);
+  composerInput.focus();
 });
 
 // --- 멘션 자동완성 ---
@@ -1302,14 +1714,17 @@ function autoresize() {
 async function sendCurrentMessage() {
   const text = composerInput.value.trim();
   if (!text && pendingAttachments.length === 0) return;
+  const sessionId = activeSessionId;
   const attachmentIds = pendingAttachments.map((attachment) => attachment.id);
+  const replyTo = pendingReplyTo;
   composerInput.value = "";
   closeMentionPopup();
   autoresize();
-  const result = await call(window.chatApi.send(activeSessionId, text, attachmentIds));
-  if (result) {
+  const result = await call(window.chatApi.send(sessionId, text, attachmentIds, replyTo));
+  if (result && sessionId === activeSessionId) {
     pendingAttachments = [];
     renderPendingAttachments();
+    if (pendingReplyTo === replyTo) clearPendingReply();
   }
   composerInput.focus();
 }
@@ -1355,11 +1770,44 @@ composerInput.addEventListener("blur", () => {
 });
 
 sendButton.addEventListener("click", sendCurrentMessage);
-stopButton.addEventListener("click", () => call(window.chatApi.stop(activeSessionId)));
+clearReplyButton.addEventListener("click", () => {
+  clearPendingReply();
+  composerInput.focus();
+});
+interjectButton.addEventListener("click", async () => {
+  if (!activeSessionId) return;
+  const sessionId = activeSessionId;
+  interjectButton.disabled = true;
+  await call(window.chatApi.turnInterject(sessionId));
+  if (sessionId === activeSessionId) interjectButton.disabled = false;
+});
+clearTurnsButton.addEventListener("click", async () => {
+  if (!activeSessionId) return;
+  const hasCurrent = Boolean(turnState.current);
+  const prompt = hasCurrent
+    ? "현재 응답과 대기 중인 모든 턴을 중지할까요?"
+    : "대기 중인 모든 턴을 비울까요?";
+  if (!window.confirm(prompt)) return;
+  const sessionId = activeSessionId;
+  clearTurnsButton.disabled = true;
+  await call(window.chatApi.stop(sessionId));
+  if (sessionId === activeSessionId) clearTurnsButton.disabled = false;
+});
 
 newSessionButton.addEventListener("click", async () => {
   const result = await call(window.chatApi.sessionsCreate());
   if (result) applyFullState(result);
+});
+
+exportSessionButton.addEventListener("click", async () => {
+  if (!activeSessionId) return;
+  const sessionId = activeSessionId;
+  exportSessionButton.disabled = true;
+  const result = await call(window.chatApi.sessionExport(sessionId));
+  if (result && !result.canceled) {
+    flashNotice(`${result.fileName || "세션"} 파일로 내보냈습니다.`, false);
+  }
+  exportSessionButton.disabled = !activeSessionId;
 });
 
 refreshProvidersButton.addEventListener("click", async () => {
@@ -1402,6 +1850,7 @@ sessionTitleEl.addEventListener("dblclick", () => {
 });
 
 // --- 타이틀바 ---
+document.getElementById("btn-settings").addEventListener("click", () => window.chatApi.openSettings());
 document.getElementById("btn-minimize").addEventListener("click", () => window.chatApi.minimize());
 document.getElementById("btn-maximize").addEventListener("click", () => window.chatApi.maximize());
 document.getElementById("btn-close").addEventListener("click", () => window.chatApi.close());
@@ -1412,19 +1861,25 @@ window.chatApi.onMaximizedState((isMaximized) => {
 
 // --- 상태 적용 ---
 function applyFullState(full) {
+  const previousSessionId = activeSessionId;
   if (full.providers) providers = full.providers;
   if (full.diagnostics) diagnostics = full.diagnostics;
   if (full.sessions) sessions = full.sessions;
   if (Object.hasOwn(full, "activeSessionId")) activeSessionId = full.activeSessionId;
+  if (previousSessionId !== activeSessionId) clearPendingReply();
+  if (previousSessionId !== activeSessionId) resetSessionSearchState();
 
   if (full.session) {
     sessionMeta = full.session.meta;
     agents = full.session.agents || [];
+    turnState = normalizeTurnState(full.session.turnState);
     typingAgents.clear();
     for (const agentId of full.session.typing || []) typingAgents.add(agentId);
     pendingAttachments = full.session.pendingAttachments || [];
     renderAllMessages(full.session.messages);
     scrollToBottom(true);
+  } else if (Object.hasOwn(full, "activeSessionId") && !full.activeSessionId) {
+    turnState = normalizeTurnState(null);
   }
 
   if (full.error) {
@@ -1442,6 +1897,7 @@ function applyFullState(full) {
   renderHeader();
   renderAgents();
   renderTyping();
+  renderTurnQueue();
   renderPendingAttachments();
 }
 
@@ -1456,11 +1912,19 @@ window.chatApi.onTyping(({ sessionId, agentId, busy }) => {
   else typingAgents.delete(agentId);
   renderTyping();
 });
+window.chatApi.onTurnState(({ sessionId, ...nextTurnState }) => {
+  if (sessionId !== activeSessionId) return;
+  turnState = normalizeTurnState(nextTurnState);
+  renderTurnQueue();
+});
 window.chatApi.onReset(({ sessionId }) => {
   if (sessionId !== activeSessionId) return;
   renderAllMessages([]);
+  clearPendingReply();
   typingAgents.clear();
+  turnState = normalizeTurnState(null);
   renderTyping();
+  renderTurnQueue();
 });
 window.chatApi.onRunEvent(handleRunEvent);
 window.chatApi.onSessionsChanged((payload) => {
@@ -1477,6 +1941,7 @@ window.chatApi.onAgents(({ sessionId, agents: nextAgents }) => {
   agents = nextAgents || [];
   renderAgents();
   renderHeader();
+  renderTurnQueue();
 });
 function showNextApproval() {
   if (activeApproval || approvalQueue.length === 0) return;

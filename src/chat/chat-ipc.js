@@ -12,12 +12,15 @@ const { ChatRoom, DEFAULT_DISCUSSION_RUN_BUDGET } = require("./chat-room");
 const { buildAgentInvocation, PERMISSION_MODES, INLINE_TEXT_LIMIT } = require("./chat-argv");
 const { createLineParser } = require("./chat-events");
 const { runAgentProcess } = require("./chat-agent-runner");
+const { GrokDockerRuntime } = require("../grok-docker-runtime");
 const {
   importAttachment,
+  importAttachmentBuffer,
   readImagePreview,
   readInlineText,
 } = require("./chat-attachments");
 const { createChatWindow } = require("./chat-window");
+const { formatSessionMarkdown, safeExportFileName } = require("./chat-export");
 
 // 채팅 기능 전체(저장소·세션·프로바이더 실행·IPC·창)를 묶는 조립 모듈.
 // main.js는 createChatFeature() 한 번과 openWindow()/shutdown()만 호출합니다.
@@ -79,13 +82,48 @@ function attachmentContextLines({ attachments, deliveries, attachmentsDir }) {
   return lines;
 }
 
+function resolveAgentExecution({
+  agentId,
+  permissionMode,
+  invocation,
+  record,
+  workspace,
+  chatCwd,
+  runId,
+  grokDockerRuntime,
+}) {
+  if (agentId === "grok" && permissionMode === "workspace-read") {
+    if (!grokDockerRuntime) throw new Error("Grok Docker 실행기가 준비되지 않았습니다.");
+    return grokDockerRuntime.buildReadExecution({
+      workspace,
+      grokArgv: invocation.argv,
+      runId,
+      cwd: chatCwd,
+    });
+  }
+  if (agentId === "grok" && permissionMode === "workspace-write") {
+    if (!grokDockerRuntime) throw new Error("Grok Docker 실행기가 준비되지 않았습니다.");
+    return grokDockerRuntime.buildWriteExecution({ workspace, grokArgv: invocation.argv, runId, cwd: chatCwd });
+  }
+  return {
+    commandPath: record.commandPath,
+    needsShell: record.needsShell,
+    argv: invocation.argv,
+    cwd: invocation.cwd,
+    promptTransport: invocation.promptTransport,
+    promptFileFlag: invocation.promptFileFlag || undefined,
+    onCancel: null,
+  };
+}
+
 function createChatFeature(options) {
-  const { electron, onWindowReady } = options;
+  const { electron, onWindowReady, openSettings } = options;
   const { ipcMain, dialog, BrowserWindow, shell } = electron;
 
   let store = null;
   let storeError = null;
   let capabilityService = null;
+  const grokDockerRuntime = options.grokDockerRuntime || new GrokDockerRuntime();
   let chatWindow = null;
   let shuttingDown = false;
   const rooms = new Map();
@@ -110,6 +148,7 @@ function createChatFeature(options) {
         get: () => ensureStore()?.getConfig()?.capabilityCache || null,
         set: (value) => ensureStore()?.patchConfig({ capabilityCache: value }),
       },
+      grokDockerProbe: () => grokDockerRuntime.probe({ force: true }),
     });
     return capabilityService;
   }
@@ -213,22 +252,56 @@ function createChatFeature(options) {
       });
       if (extraLines.length > 0) fullPrompt = `${prompt}\n${extraLines.join("\n")}`;
 
+      const permissionMode = meta.permissionMode || "chat";
+      const execution = resolveAgentExecution({
+        agentId: agent.id,
+        permissionMode,
+        invocation,
+        record,
+        workspace: meta.workspace || null,
+        chatCwd: store.runtimeChatDir(),
+        runId,
+        grokDockerRuntime,
+      });
+
       const run = runAgentProcess({
-        commandPath: record.commandPath,
-        needsShell: record.needsShell,
-        argv: invocation.argv,
+        commandPath: execution.commandPath,
+        needsShell: execution.needsShell,
+        argv: execution.argv,
         prompt: fullPrompt,
-        promptTransport: invocation.promptTransport,
-        cwd: invocation.cwd,
+        promptTransport: execution.promptTransport,
+        promptFileFlag: execution.promptFileFlag,
+        cwd: execution.cwd,
         outputFile,
         parseLine: createLineParser(agent.id),
         onEvent: emitEvent,
         timeoutMs: options.timeoutMs,
+        maxOutputBytes: execution.maxOutputBytes,
+        provider: agent.id,
+        runId,
+        onCancel: execution.onCancel,
       });
       return {
-        promise: run.promise.then((result) =>
-          result.ok ? { ...result, deliveries: invocation.deliveries } : result
-        ),
+        promise: run.promise.then(async (result) => {
+          if (!result.ok) return result;
+          let workspaceChangeSet = null;
+          if (agent.id === "grok" && permissionMode === "workspace-write") {
+            if (!result.workspaceChangeManifest) {
+              throw new Error("Grok이 검증 가능한 변경 세트를 만들지 못했습니다.");
+            }
+            workspaceChangeSet = grokDockerRuntime.stageWriteChangeSet({
+              sessionId,
+              workspace: meta.workspace,
+              manifest: result.workspaceChangeManifest,
+            });
+          }
+          const { workspaceChangeManifest: _privateManifest, ...publicResult } = result;
+          return {
+            ...publicResult,
+            deliveries: invocation.deliveries,
+            ...(workspaceChangeSet ? { workspaceChangeSet } : {}),
+          };
+        }),
         cancel: run.cancel,
       };
     };
@@ -241,7 +314,7 @@ function createChatFeature(options) {
       const record = records.getRecord(def.id);
       if (record) discovered.push(record);
     }
-    return roomAgentsFromCapabilities(discovered, meta?.agents || {});
+    return roomAgentsFromCapabilities(discovered, meta?.agents || {}, meta?.permissionMode || "chat");
   }
 
   function getRoom(sessionId) {
@@ -255,7 +328,13 @@ function createChatFeature(options) {
       agents: buildRoomAgents(session.meta),
       initialMessages: session.messages,
       runAgent: makeRunAgent(sessionId),
-      prepareAgent: options.prepareAgent,
+      prepareAgent: async (payload) => {
+        const latestMeta = store?.readMeta(sessionId);
+        if (payload?.agent?.id === "grok" && ["workspace-read", "workspace-write"].includes(latestMeta?.permissionMode)) {
+          await grokDockerRuntime.ensureReady();
+        }
+        if (typeof options.prepareAgent === "function") await options.prepareAgent(payload);
+      },
       meta: { permissionMode: session.meta.permissionMode || "chat" },
     });
 
@@ -393,6 +472,15 @@ function createChatFeature(options) {
     );
 
     ipcMain.handle(
+      "chat:sessions:search",
+      wrap(async ({ query }) => {
+        if (!ensureStore()) return { results: [] };
+        const cleanQuery = typeof query === "string" ? query.trim() : "";
+        return { results: cleanQuery ? store.searchSessions(cleanQuery) : [] };
+      })
+    );
+
+    ipcMain.handle(
       "chat:sessions:rename",
       wrap(async ({ sessionId, title }) => {
         requireSession(sessionId);
@@ -411,6 +499,7 @@ function createChatFeature(options) {
           rooms.delete(sessionId);
         }
         pendingAttachments.delete(sessionId);
+        grokDockerRuntime.discardSessionChanges(sessionId);
         store.deleteSession(sessionId);
         let nextId = getActiveSessionId();
         if (!nextId && !store.readOnly) {
@@ -422,8 +511,34 @@ function createChatFeature(options) {
     );
 
     ipcMain.handle(
+      "chat:session:export",
+      wrap(async ({ sessionId }) => {
+        requireSession(sessionId);
+        const meta = store.readMeta(sessionId);
+        const saveOptions = {
+          title: "채팅 세션 내보내기",
+          defaultPath: safeExportFileName(meta?.title),
+          buttonLabel: "내보내기",
+          filters: [{ name: "Markdown", extensions: ["md"] }],
+          properties: ["createDirectory", "showOverwriteConfirmation"],
+        };
+        const owner = chatWindow && !chatWindow.isDestroyed() ? chatWindow : null;
+        const result = owner
+          ? await dialog.showSaveDialog(owner, saveOptions)
+          : await dialog.showSaveDialog(saveOptions);
+        if (result.canceled || !result.filePath) return { canceled: true };
+
+        const session = store.getSession(sessionId);
+        if (!session) throw new Error("세션을 찾을 수 없습니다.");
+        const markdown = formatSessionMarkdown(session.meta, session.messages);
+        await fs.promises.writeFile(result.filePath, markdown, "utf8");
+        return { canceled: false, fileName: path.basename(result.filePath) };
+      })
+    );
+
+    ipcMain.handle(
       "chat:send",
-      wrap(async ({ sessionId, text, attachmentIds }) => {
+      wrap(async ({ sessionId, text, attachmentIds, replyTo }) => {
         requireSession(sessionId);
         const room = getRoom(sessionId);
         const pending = pendingFor(sessionId);
@@ -435,7 +550,7 @@ function createChatFeature(options) {
             pending.delete(id);
           }
         }
-        const entry = room.sendUserMessage({ text, attachments });
+        const entry = room.sendUserMessage({ text, attachments, replyTo });
         if (!entry) throw new Error("보낼 내용이 없습니다.");
         return {};
       })
@@ -517,6 +632,7 @@ function createChatFeature(options) {
         } catch {
           throw new Error("선택한 폴더를 확인할 수 없습니다.");
         }
+        grokDockerRuntime.discardSessionChanges(sessionId);
         store.updateMeta(sessionId, { workspace });
         refreshRoomAgents(sessionId);
         return { meta: publicMeta(store.readMeta(sessionId)), ...sessionsPayload() };
@@ -527,6 +643,7 @@ function createChatFeature(options) {
       "chat:workspace:clear",
       wrap(async ({ sessionId }) => {
         requireSession(sessionId);
+        grokDockerRuntime.discardSessionChanges(sessionId);
         // 워크스페이스가 없으면 workspace 권한 모드도 의미가 없어 chat으로 되돌립니다.
         store.updateMeta(sessionId, { workspace: null, permissionMode: "chat" });
         refreshRoomAgents(sessionId);
@@ -563,6 +680,9 @@ function createChatFeature(options) {
         if (typeof patch?.model === "string") next.model = patch.model.slice(0, 64);
         if (typeof patch?.effort === "string") next.effort = patch.effort.slice(0, 16);
         if (typeof patch?.autoApprove === "boolean") {
+          if (patch.autoApprove && agentId === "grok") {
+            throw new Error("Grok 변경은 Docker 복제본 검토 승인을 생략할 수 없습니다.");
+          }
           if (patch.autoApprove && meta.permissionMode !== "workspace-write") {
             throw new Error("자동 승인은 워크스페이스 쓰기 권한에서만 켤 수 있습니다.");
           }
@@ -599,6 +719,32 @@ function createChatFeature(options) {
     );
 
     ipcMain.handle(
+      "chat:workspace-changes:apply",
+      wrap(async ({ sessionId, approvalId }) => {
+        requireSession(sessionId);
+        if (store.readOnly || store.readMeta(sessionId)?.readOnly) {
+          throw new Error("읽기 전용 세션에서는 변경을 적용할 수 없습니다.");
+        }
+        return grokDockerRuntime.applyWorkspaceChanges(String(approvalId || ""), sessionId);
+      })
+    );
+    ipcMain.handle(
+      "chat:workspace-changes:cancel",
+      wrap(async ({ sessionId, approvalId }) => {
+        requireSession(sessionId);
+        return grokDockerRuntime.cancelWorkspaceChanges(String(approvalId || ""), sessionId);
+      })
+    );
+
+    ipcMain.handle(
+      "chat:attachments:add-pasted",
+      wrap(async ({ sessionId, images }) => {
+        requireSession(sessionId);
+        return importPastedImages(sessionId, Array.isArray(images) ? images.slice(0, 10) : []);
+      })
+    );
+
+    ipcMain.handle(
       "chat:attachments:remove",
       wrap(async ({ sessionId, attachmentId }) => {
         requireSession(sessionId);
@@ -622,6 +768,9 @@ function createChatFeature(options) {
       })
     );
 
+    ipcMain.on("chat:open-settings", () => {
+      if (typeof openSettings === "function") openSettings();
+    });
     ipcMain.on("chat:minimize", () => {
       if (chatWindow && !chatWindow.isDestroyed()) chatWindow.minimize();
     });
@@ -662,6 +811,37 @@ function createChatFeature(options) {
     };
   }
 
+  function importPastedImages(sessionId, images) {
+    const pending = pendingFor(sessionId);
+    const attachments = [];
+    const errors = [];
+    let sessionBytes = store.sessionAttachmentsSize(sessionId);
+    for (const [index, image] of images.entries()) {
+      const name = typeof image?.name === "string" && image.name.trim()
+        ? image.name.slice(0, 160)
+        : `붙여넣은-이미지-${index + 1}.png`;
+      const result = importAttachmentBuffer({
+        name,
+        data: image?.data,
+        attachmentsDir: store.attachmentsDir(sessionId),
+        currentSessionBytes: sessionBytes,
+        requireImage: true,
+      });
+      if (result.ok) {
+        sessionBytes += result.attachment.size;
+        pending.set(result.attachment.id, result.attachment);
+        attachments.push(publicAttachment(result.attachment));
+      } else {
+        errors.push({ name: path.basename(name), error: result.error });
+      }
+    }
+    return {
+      attachments,
+      errors,
+      pendingAttachments: [...pending.values()].map(publicAttachment),
+    };
+  }
+
   function openWindow() {
     if (chatWindow && !chatWindow.isDestroyed()) {
       chatWindow.show();
@@ -687,6 +867,7 @@ function createChatFeature(options) {
   // 앱 종료: 진행 중이던 세션은 interrupted로 남겨 다음 시작 때 안내합니다.
   function shutdown() {
     shuttingDown = true;
+    grokDockerRuntime.clearWorkspaceChanges();
     for (const [sessionId, room] of rooms) {
       try {
         if (room.activeRuns > 0 && store && !store.readOnly) {
@@ -703,4 +884,10 @@ function createChatFeature(options) {
   return { registerIpcHandlers, openWindow, getWindow, shutdown };
 }
 
-module.exports = { createChatFeature, publicMeta, publicAttachment, attachmentContextLines };
+module.exports = {
+  createChatFeature,
+  publicMeta,
+  publicAttachment,
+  attachmentContextLines,
+  resolveAgentExecution,
+};

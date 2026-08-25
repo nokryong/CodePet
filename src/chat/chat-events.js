@@ -20,6 +20,9 @@ function truncateLabel(text, limit = 80) {
   return compact.length > limit ? `${compact.slice(0, limit)}…` : compact;
 }
 
+const GROK_CHANGESET_PREFIX = "CODEPET_GROK_CHANGESET_V1 ";
+const GROK_CHANGESET_LINE_LIMIT = 2 * 1024 * 1024;
+
 // claude -p --output-format stream-json --include-partial-messages --verbose
 function parseClaudeLine(line) {
   const event = parseJsonLine(line);
@@ -78,7 +81,11 @@ function parseCodexLine(line) {
       return event.type === "item.started" ? { kind: "status", label: "생각 중" } : null;
     }
     if (item.type === "error") {
-      return { kind: "error", message: truncateLabel(item.message || "실행 오류", 200) };
+      const message = String(item.message || "");
+      // Codex가 매 턴 시작에 error 아이템으로 보내는 스킬 컨텍스트 예산 경고는
+      // 실행 오류가 아니므로 진단 기록을 오염시키지 않게 무시합니다.
+      if (/skill descriptions were shortened/i.test(message)) return null;
+      return { kind: "error", message: truncateLabel(message || "실행 오류", 200) };
     }
     return null;
   }
@@ -136,11 +143,69 @@ function parseAgyLine(line) {
   return null;
 }
 
+function parseGrokLine(line) {
+  const raw = String(line || "");
+  if (raw.startsWith(GROK_CHANGESET_PREFIX)) {
+    const payload = raw.slice(GROK_CHANGESET_PREFIX.length);
+    if (Buffer.byteLength(payload, "utf8") > GROK_CHANGESET_LINE_LIMIT) {
+      return { kind: "error", message: "Grok 변경 세트가 출력 상한을 초과했습니다." };
+    }
+    try {
+      return { kind: "workspace-change-manifest", manifest: JSON.parse(payload) };
+    } catch {
+      return { kind: "error", message: "Grok 변경 세트 형식을 읽지 못했습니다." };
+    }
+  }
+  const event = parseJsonLine(raw);
+  if (!event || typeof event !== "object") {
+    return raw.trim() ? { kind: "fallback", text: raw.trim() } : null;
+  }
+  if (event.type === "stream_event" && event.event) {
+    const inner = event.event;
+    if (inner.type === "content_block_delta" && inner.delta?.type === "text_delta") {
+      return { kind: "delta", text: String(inner.delta.text || "") };
+    }
+    if (inner.type === "content_block_start" && inner.content_block?.type === "thinking") {
+      return { kind: "status", label: "생각 중" };
+    }
+    if (inner.type === "content_block_start" && inner.content_block?.type === "tool_use") {
+      return { kind: "status", label: `도구: ${truncateLabel(inner.content_block.name || "tool")}` };
+    }
+    return null;
+  }
+  if (event.type === "result") {
+    if (event.subtype === "success" && event.is_error === false && typeof event.result === "string") {
+      return { kind: "final", text: event.result };
+    }
+    if (event.is_error || event.subtype === "error_during_execution") {
+      const errors = Array.isArray(event.errors)
+        ? event.errors
+            .map((error) => typeof error === "string" ? error : error?.message || error?.error || "")
+            .filter(Boolean)
+            .join("; ")
+        : "";
+      return {
+        kind: "error",
+        message: truncateLabel(event.result || errors || event.subtype || "Grok 실행 오류", 200),
+      };
+    }
+  }
+  return null;
+}
+
 function createLineParser(providerId) {
   if (providerId === "claude") return parseClaudeLine;
   if (providerId === "codex") return parseCodexLine;
   if (providerId === "agy") return parseAgyLine;
+  if (providerId === "grok") return parseGrokLine;
   return null;
 }
 
-module.exports = { createLineParser, parseClaudeLine, parseCodexLine, parseAgyLine };
+module.exports = {
+  createLineParser,
+  parseClaudeLine,
+  parseCodexLine,
+  parseAgyLine,
+  parseGrokLine,
+  GROK_CHANGESET_PREFIX,
+};

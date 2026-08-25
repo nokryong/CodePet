@@ -13,6 +13,11 @@
         <span class="titlebar-title">CodePet 채팅</span>
       </div>
       <div class="titlebar-controls">
+        <button class="titlebar-btn btn-settings" id="btn-settings" type="button" aria-label="설정 열기" title="설정">
+          <svg viewBox="0 0 10 10" aria-hidden="true">
+            <path d="M 1,2.5 L 9,2.5 M 1,5 L 9,5 M 1,7.5 L 9,7.5 M 3,1.2 L 3,3.8 M 7,3.7 L 7,6.3 M 4.5,6.2 L 4.5,8.8" />
+          </svg>
+        </button>
         <button class="titlebar-btn btn-minimize" id="btn-minimize" type="button" aria-label="최소화">
           <svg viewBox="0 0 10 10"><path d="M 1,5 L 9,5" /></svg>
         </button>
@@ -31,6 +36,16 @@
         <div class="sidebar-head">
           <span class="sidebar-title">세션</span>
           <button class="button button-small" id="btn-new-session" type="button">+ 새 채팅</button>
+        </div>
+        <div class="session-search">
+          <input
+            id="session-search-input"
+            type="search"
+            aria-label="세션 메시지 검색"
+            placeholder="세션 메시지 검색"
+            autocomplete="off"
+            spellcheck="false"
+          />
         </div>
         <ul class="session-list" id="session-list" aria-label="세션 목록"></ul>
         <div class="sidebar-foot">
@@ -71,6 +86,9 @@
               </select>
               <span class="enforcement-hint" id="enforcement-hint"></span>
               <button class="chip-button" id="btn-discussion" type="button" title="에이전트 토론 시작">💬 토론</button>
+              <button class="chip-button" id="btn-export-session" type="button" title="현재 세션을 마크다운 파일로 내보내기">
+                <span class="chip-icon" aria-hidden="true">⇩</span><span>내보내기</span>
+              </button>
             </div>
           </div>
           <div class="room-actions">
@@ -88,6 +106,24 @@
         <footer class="composer">
           <div class="mention-popup" id="mention-popup" role="listbox" hidden></div>
           <div class="attachment-row" id="attachment-row" hidden></div>
+          <section class="turn-queue-bar" id="turn-queue-bar" aria-label="발언 큐" hidden>
+            <div class="turn-queue-status" aria-live="polite">
+              <span class="turn-current" id="turn-current" hidden></span>
+              <span class="turn-next-label" id="turn-next-label" hidden>다음</span>
+              <div class="turn-queue-list" id="turn-queue-list" role="list" aria-label="대기 중인 발언"></div>
+            </div>
+            <div class="turn-queue-actions">
+              <button class="turn-action turn-action-danger" id="btn-interject" type="button" hidden>응답 중단</button>
+              <button class="turn-action" id="btn-clear-turns" type="button" hidden>모두 비우기</button>
+            </div>
+          </section>
+          <section class="reply-preview" id="reply-preview" aria-label="인용 답장" hidden>
+            <div class="reply-preview-copy">
+              <strong id="reply-preview-author"></strong>
+              <span id="reply-preview-excerpt"></span>
+            </div>
+            <button class="reply-preview-clear" id="btn-clear-reply" type="button" aria-label="인용 해제" title="인용 해제">×</button>
+          </section>
           <div class="composer-box" id="composer-box">
             <button class="icon-button" id="btn-attach" type="button" title="파일 첨부 (이미지·문서, 최대 20MiB)">＋</button>
             <textarea
@@ -96,7 +132,6 @@
               placeholder="참여 중인 에이전트에게 메시지…  (@로 대상 지정 · Enter 전송)"
               autocomplete="off"
             ></textarea>
-            <button class="button button-danger" id="btn-stop" type="button" hidden>중지</button>
             <button class="button button-primary" id="btn-send" type="button">전송</button>
           </div>
         </footer>
@@ -136,6 +171,7 @@
     </div>
 
     <script src="./chat-markdown.js"></script>
+    <script src="./chat-clipboard.js"></script>
     <script src="./chat.js"></script>
   </body>
 </html>

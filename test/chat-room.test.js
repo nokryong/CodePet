@@ -180,6 +180,157 @@ test("브로드캐스트 대기 턴과 멘션 호출이 겹치면 한 턴으로 
   assert.deepEqual(calls.map((call) => call.agentId), ["claude", "codex"]);
 });
 
+test("브로드캐스트의 뒤쪽 대기자를 멘션하면 바로 다음 턴으로 승격한다", async () => {
+  const agents = makeAgents();
+  agents[2].available = true;
+  const calls = [];
+  const room = new ChatRoom({
+    agents,
+    random: () => 0.99,
+    runAgent: fakeRunner({
+      claude: [{ ok: true, text: "@agy 다음으로 답해줘" }],
+      codex: [{ ok: true, text: "Codex 답" }],
+      agy: [{ ok: true, text: "AGY 답" }],
+    }, calls),
+  });
+  room.sendUserMessage("셋 다 의견 줘");
+  await settle(room);
+
+  assert.deepEqual(calls.map((call) => call.agentId), ["claude", "agy", "codex"]);
+  assert.match(calls[1].prompt, /2번째입니다/);
+  assert.match(calls[2].prompt, /3번째입니다/);
+});
+
+test("여러 대기자를 멘션하면 문장에 나온 순서대로 승격한다", async () => {
+  const agents = makeAgents();
+  agents[2].available = true;
+  const calls = [];
+  const room = new ChatRoom({
+    agents,
+    random: () => 0.99,
+    runAgent: fakeRunner({
+      claude: [{ ok: true, text: "@agy 먼저, @codex 다음으로 답해줘" }],
+      codex: [{ ok: true, text: "Codex 답" }],
+      agy: [{ ok: true, text: "AGY 답" }],
+    }, calls),
+  });
+  room.sendUserMessage("셋 다 의견 줘");
+  await settle(room);
+
+  assert.deepEqual(calls.map((call) => call.agentId), ["claude", "agy", "codex"]);
+});
+
+test("승격된 턴은 멘션 깊이를 이어받아 연쇄 호출 상한을 지킨다", async () => {
+  const agents = makeAgents();
+  agents[2].available = true;
+  const calls = [];
+  const room = new ChatRoom({
+    agents,
+    random: () => 0.99,
+    mentionChainLimit: 1,
+    runAgent: fakeRunner({
+      claude: [{ ok: true, text: "@agy 다음으로 답해줘" }],
+      codex: [{ ok: true, text: "Codex 답" }],
+      agy: [{ ok: true, text: "@codex 다시 답해줘" }],
+    }, calls),
+  });
+  room.sendUserMessage("셋 다 의견 줘");
+  await settle(room);
+
+  assert.deepEqual(calls.map((call) => call.agentId), ["claude", "agy", "codex"]);
+  assert.match(calls[1].prompt, /이번 턴에는 다른 참가자를 추가 호출할 수 없습니다/);
+});
+
+test("턴 상태 이벤트는 멘션으로 재정렬된 대기열을 공개한다", async () => {
+  const agents = makeAgents();
+  agents[2].available = true;
+  const states = [];
+  const room = new ChatRoom({
+    agents,
+    random: () => 0.99,
+    runAgent: fakeRunner({
+      claude: [{ ok: true, text: "@agy 먼저, @codex 다음으로 답해줘" }],
+      codex: [{ ok: true, text: "Codex 답" }],
+      agy: [{ ok: true, text: "AGY 답" }],
+    }),
+  });
+  room.on("turn-state", (state) => states.push(state));
+  room.sendUserMessage("셋 다 의견 줘");
+  await settle(room);
+
+  assert.ok(states.some((state) =>
+    state.current === "claude"
+    && state.queue.map((turn) => turn.agentId).join(",") === "agy,codex"
+  ));
+});
+
+test("사용자 멘션은 묵은 브로드캐스트 턴보다 앞에 예약한다", async () => {
+  const agents = makeAgents();
+  agents[2].available = true;
+  const calls = [];
+  const states = [];
+  let releaseFirst;
+  const room = new ChatRoom({
+    agents,
+    random: () => 0.34, // [agy, claude, codex] 순서로 고정
+    runAgent: ({ agent }) => {
+      calls.push(agent.id);
+      if (calls.length === 1) {
+        return {
+          promise: new Promise((resolve) => { releaseFirst = resolve; }),
+          cancel: () => {},
+        };
+      }
+      return { promise: Promise.resolve({ ok: true, text: `${agent.id} 답` }), cancel: () => {} };
+    },
+  });
+  room.on("turn-state", (state) => states.push(state));
+
+  room.sendUserMessage("셋 다 의견 줘");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(calls, ["agy"]);
+
+  room.sendUserMessage("@agy 네 말투를 소개해줘");
+  assert.ok(states.some((state) =>
+    state.current === "agy"
+    && state.queue.map((turn) => turn.agentId).join(",") === "agy,claude,codex"
+  ));
+
+  releaseFirst({ ok: true, text: "AGY 첫 답" });
+  await settle(room);
+
+  assert.deepEqual(calls, ["agy", "agy", "claude", "codex"]);
+});
+
+test("사용자 다중 멘션은 문장에 나온 순서를 보존한다", async () => {
+  const agents = makeAgents();
+  agents[2].available = true;
+  const calls = [];
+  let releaseFirst;
+  const room = new ChatRoom({
+    agents,
+    random: () => 0, // 기존 셔플이라면 [codex, agy]로 뒤집힘
+    runAgent: ({ agent }) => {
+      calls.push(agent.id);
+      if (calls.length === 1) {
+        return {
+          promise: new Promise((resolve) => { releaseFirst = resolve; }),
+          cancel: () => {},
+        };
+      }
+      return { promise: Promise.resolve({ ok: true, text: `${agent.id} 답` }), cancel: () => {} };
+    },
+  });
+
+  room.sendUserMessage("@claude 먼저 기다려줘");
+  await new Promise((resolve) => setImmediate(resolve));
+  room.sendUserMessage("@agy 먼저, @codex 다음으로 답해줘");
+  releaseFirst({ ok: true, text: "Claude 답" });
+  await settle(room);
+
+  assert.deepEqual(calls, ["claude", "agy", "codex"]);
+});
+
 test("서로 다른 사용자 메시지의 같은 에이전트 턴은 합치지 않는다", async () => {
   const calls = [];
   let releaseFirst;
@@ -624,6 +775,107 @@ test("권한 요청을 승인하면 같은 턴을 자동 승인으로 한 번 �
   assert.equal(room.messages.at(-1).text, "승인 후 완료");
 });
 
+test("승인 후 재시도도 권한을 요구하면 상세 원인을 남긴다", async () => {
+  const room = new ChatRoom({
+    agents: makeAgents(),
+    runAgent: () => ({
+      promise: Promise.resolve({
+        ok: false,
+        approvalRequired: true,
+        approval: {
+          summary: "도구 실행 권한이 필요합니다.",
+          detail: "종료 코드 1 · 워크스페이스 밖 경로 접근이 거부되었습니다",
+        },
+        diagnostics: { provider: "codex", exitCode: 1 },
+      }),
+      cancel: () => {},
+    }),
+  });
+  room.once("approval-request", ({ approvalId }) => room.resolveApproval(approvalId, "approve"));
+  room.sendUserMessage("@codex 실행해줘");
+  await settle(room);
+
+  const failure = room.messages.at(-1);
+  assert.equal(failure.error, true);
+  assert.doesNotMatch(failure.text, /알 수 없는 오류/);
+  assert.match(failure.text, /승인 후 재시도에도 권한을 획득하지 못했습니다/);
+  assert.match(failure.text, /워크스페이스 밖 경로 접근이 거부되었습니다/);
+  assert.equal(failure.diagnostics.approvedRetry, true);
+});
+
+test("자동 승인 상태에서 권한 요청이 반환되면 상세 원인을 남긴다", async () => {
+  const agents = makeAgents().map((agent) =>
+    agent.id === "codex" ? { ...agent, autoApprove: true } : agent
+  );
+  const calls = [];
+  let approvalAsked = false;
+  const room = new ChatRoom({
+    agents,
+    runAgent: ({ autoApprove }) => {
+      calls.push(autoApprove);
+      return {
+        promise: Promise.resolve({
+          ok: false,
+          approvalRequired: true,
+          approval: { summary: "도구 실행 권한이 필요합니다.", detail: "샌드박스 실행 차단" },
+        }),
+        cancel: () => {},
+      };
+    },
+  });
+  room.on("approval-request", () => { approvalAsked = true; });
+  room.sendUserMessage("@codex 실행해줘");
+  await settle(room);
+
+  assert.deepEqual(calls, [true]);
+  assert.equal(approvalAsked, false);
+  const failure = room.messages.at(-1);
+  assert.equal(failure.error, true);
+  assert.doesNotMatch(failure.text, /알 수 없는 오류/);
+  assert.match(failure.text, /자동 승인으로 실행했지만 권한 요청이 다시 발생했습니다/);
+  assert.match(failure.text, /샌드박스 실행 차단/);
+});
+
+test("권한 요청을 거부하면 기존 문구를 유지한다", async () => {
+  const calls = [];
+  const room = new ChatRoom({
+    agents: makeAgents(),
+    runAgent: ({ autoApprove }) => {
+      calls.push(autoApprove);
+      return {
+        promise: Promise.resolve({
+          ok: false,
+          approvalRequired: true,
+          approval: { summary: "명령 권한" },
+        }),
+        cancel: () => {},
+      };
+    },
+  });
+  room.once("approval-request", ({ approvalId }) => room.resolveApproval(approvalId, "deny"));
+  room.sendUserMessage("@codex 실행해줘");
+  await settle(room);
+
+  assert.deepEqual(calls, [false]);
+  const failure = room.messages.at(-1);
+  assert.equal(failure.error, true);
+  assert.equal(failure.text, "권한 요청을 거부했습니다.");
+});
+
+test("원인 없는 실패도 내부 식별자로 설명된다", async () => {
+  const room = new ChatRoom({
+    agents: makeAgents(),
+    runAgent: fakeRunner({ codex: [{ ok: false }] }),
+  });
+  room.sendUserMessage("@codex 실행해줘");
+  await settle(room);
+
+  const failure = room.messages.at(-1);
+  assert.equal(failure.error, true);
+  assert.doesNotMatch(failure.text, /알 수 없는 오류/);
+  assert.match(failure.text, /원인이 기록되지 않았습니다/);
+});
+
 test("실패한 응답은 오류 메시지로 남는다", async () => {
   const room = new ChatRoom({
     agents: makeAgents(),
@@ -780,4 +1032,41 @@ test("publicAgents에는 실행 경로 정보가 없다", () => {
   assert.ok(!json.includes("commandPath"));
   assert.ok(!json.includes("needsShell"));
   assert.ok(!json.includes("secret"));
+});
+
+test("사용자 인용 정보는 허용 필드만 정제해 메시지에 저장한다", () => {
+  const room = new ChatRoom({ agents: [], runAgent: fakeRunner({}) });
+  const entry = room.sendUserMessage({
+    text: "이 부분을 검토해줘",
+    replyTo: {
+      messageId: "  m-original  ",
+      author: "  codex  ",
+      authorType: "agent",
+      excerpt: ` 첫 줄\n${"가".repeat(240)} `,
+      untrusted: "저장되면 안 됨",
+    },
+  });
+
+  assert.deepEqual(Object.keys(entry.replyTo), ["messageId", "author", "authorType", "excerpt"]);
+  assert.equal(entry.replyTo.messageId, "m-original");
+  assert.equal(entry.replyTo.author, "codex");
+  assert.equal(entry.replyTo.authorType, "agent");
+  assert.equal(entry.replyTo.excerpt.length, 200);
+  assert.ok(!entry.replyTo.excerpt.includes("\n"));
+  assert.equal(Object.hasOwn(entry.replyTo, "untrusted"), false);
+});
+
+test("비객체이거나 필수 필드가 잘못된 인용 정보는 저장하지 않는다", () => {
+  const values = [
+    "m-original",
+    ["m-original"],
+    { messageId: "m1", author: "codex", authorType: "system", excerpt: "내용" },
+    { messageId: "m1", author: "codex", authorType: "agent", excerpt: "   " },
+  ];
+
+  for (const replyTo of values) {
+    const room = new ChatRoom({ agents: [], runAgent: fakeRunner({}) });
+    const entry = room.sendUserMessage({ text: "답장", replyTo });
+    assert.equal(Object.hasOwn(entry, "replyTo"), false);
+  }
 });

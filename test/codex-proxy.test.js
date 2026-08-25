@@ -2,6 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const http = require("node:http");
+const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
 
@@ -318,7 +319,6 @@ test("저장 계정이 없으면 들어온 인증 헤더를 그대로 통과시�
 });
 
 test("WebSocket 업그레이드는 인증을 갈아끼운 원시 터널로 중계한다", async () => {
-  const net = require("node:net");
   let upgradeHeaders = null;
   const upstream = http.createServer();
   upstream.on("upgrade", (request, socket) => {
@@ -382,6 +382,72 @@ test("WebSocket 업그레이드는 인증을 갈아끼운 원시 터널로 중�
   }
 });
 
+test("계정 전환은 기존 WebSocket만 끊고 재연결 handshake에 새 계정을 주입한다", async () => {
+  const upgradeAuthorizations = [];
+  const upstreamSockets = new Set();
+  const upstream = http.createServer();
+  upstream.on("upgrade", (request, socket) => {
+    upgradeAuthorizations.push(request.headers.authorization);
+    upstreamSockets.add(socket);
+    socket.once("close", () => upstreamSockets.delete(socket));
+    socket.write(
+      "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n"
+    );
+  });
+  await new Promise((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+
+  let accounts = [{ key: "a", label: "A", authPath: "token-a" }];
+  const proxy = new CodexProxy({
+    upstreamBase: `http://127.0.0.1:${upstream.address().port}/backend-api/codex`,
+    port: 19206,
+    resolveAccounts: async () => accounts,
+    readAuth: (authPath) => ({ accessToken: authPath, accountId: `id-${authPath}` }),
+  });
+  const proxyPort = await proxy.start();
+
+  const connectTunnel = () => new Promise((resolve, reject) => {
+    const socket = net.connect(proxyPort, "127.0.0.1", () => {
+      socket.write(
+        "GET /v1/responses HTTP/1.1\r\nHost: codepet\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n"
+      );
+    });
+    const timeout = setTimeout(() => {
+      socket.destroy();
+      reject(new Error("websocket reconnect test timeout"));
+    }, 4000);
+    let response = "";
+    socket.on("data", (chunk) => {
+      response += chunk;
+      if (!response.includes("101 Switching Protocols")) return;
+      clearTimeout(timeout);
+      resolve(socket);
+    });
+    socket.once("error", (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+  });
+
+  try {
+    const firstSocket = await connectTunnel();
+    assert.deepEqual(upgradeAuthorizations, ["Bearer token-a"]);
+
+    // 실제 main 흐름과 같은 순서: 활성 계정/캐시가 B를 가리킨 뒤 기존 터널을 끊습니다.
+    accounts = [{ key: "b", label: "B", authPath: "token-b" }];
+    const firstClosed = new Promise((resolve) => firstSocket.once("close", resolve));
+    assert.equal(proxy.disconnectWebSocketTunnels("account-switch"), 1);
+    await firstClosed;
+
+    const secondSocket = await connectTunnel();
+    assert.deepEqual(upgradeAuthorizations, ["Bearer token-a", "Bearer token-b"]);
+    secondSocket.destroy();
+  } finally {
+    proxy.stop();
+    for (const socket of upstreamSockets) socket.destroy();
+    upstream.close();
+  }
+});
+
 test("disableProxyInConfig는 마커가 없으면 파일을 건드리지 않는다", () => {
   const { disableProxyInConfig, enableProxyInConfig } = require("../src/codex-proxy");
   const fs = require("node:fs");
@@ -437,7 +503,6 @@ test("계정 주입 시 클라이언트의 옛 chatgpt-account-id 헤더는 제�
 });
 
 test("WebSocket 핸드셰이크 중 upstream이 닫으면 hang하지 않고 다음 후보로 넘어간다", async () => {
-  const net = require("node:net");
   let attempt = 0;
   // 첫 연결은 헤더 완성 전 소켓을 닫고, 두 번째는 101을 준다.
   const upstream = net.createServer((socket) => {
