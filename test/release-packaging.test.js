@@ -60,6 +60,10 @@ test("release workflow builds three native runners and uploads all three package
   assert.match(releaseWorkflow, /mv "\$generated_zsync" "\$expected_zsync"/);
   assert.match(releaseWorkflow, /--appimage-updateinformation/);
   assert.match(releaseWorkflow, /gh release upload/);
+  assert.match(
+    releaseWorkflow,
+    /gh release upload[^\n]+artifacts\/SHA256SUMS --clobber/
+  );
   assert.match(releaseWorkflow, /gh release create[^\n]+--draft/);
   assert.match(releaseWorkflow, /gh release edit[^\n]+--draft=false/);
   assert.match(releaseWorkflow, /chown root:root artifacts\/linux-unpacked\/chrome-sandbox/);

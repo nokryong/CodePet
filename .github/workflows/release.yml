@@ -150,7 +150,14 @@ jobs:
     needs: [build, collect]
     runs-on: ubuntu-latest
     steps:
+      - name: Download the complete release bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: CodePet-${{ github.sha }}-all-platforms
+          path: artifacts
       - name: Publish the complete three-platform GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release edit "${GITHUB_REF_NAME}" --draft=false
+        run: |
+          gh release upload "${GITHUB_REF_NAME}" artifacts/SHA256SUMS --clobber
+          gh release edit "${GITHUB_REF_NAME}" --draft=false
