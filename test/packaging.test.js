@@ -70,15 +70,24 @@ test("참조되지 않는 구형 미리보기 자산은 저장소에 없다", ()
   }
 });
 
-test("README가 .code-pet 저장소·권한·첨부·AGY 구분을 문서화한다", () => {
+test("영문·한국어 README가 저장소·권한·첨부·AGY 구분을 함께 문서화한다", () => {
   const readme = fs.readFileSync(path.join(ROOT, "README.md"), "utf8");
-  assert.match(readme, /\.code-pet/);
-  assert.match(readme, /CODE_PET_HOME/);
-  assert.match(readme, /워크스페이스와 권한/);
-  assert.match(readme, /첨부 파일/);
-  assert.match(readme, /IDE와 `agy` CLI는 별개/);
-  assert.match(readme, /채팅 저장소에는 CLI 로그인 토큰\/자격 증명을 기록하지 않습니다/);
-  assert.match(readme, /~\/\.codepet\/\*-switch/);
+  const readmeKo = fs.readFileSync(path.join(ROOT, "README.ko.md"), "utf8");
+  assert.match(readme, /\[한국어\]\(README\.ko\.md\)/);
+  assert.match(readmeKo, /\[English\]\(README\.md\)/);
+  for (const content of [readme, readmeKo]) {
+    assert.match(content, /\.code-pet/);
+    assert.match(content, /CODE_PET_HOME/);
+    assert.match(content, /~\/\.codepet\/\*-switch/);
+  }
+  assert.match(readme, /Workspaces and permissions/);
+  assert.match(readme, /Attachments/);
+  assert.match(readme, /the IDE and `agy` CLI are separate/);
+  assert.match(readme, /chat store never records CLI login tokens or credentials/);
+  assert.match(readmeKo, /워크스페이스와 권한/);
+  assert.match(readmeKo, /첨부 파일/);
+  assert.match(readmeKo, /IDE와 `agy` CLI는 별개/);
+  assert.match(readmeKo, /채팅 저장소에는 CLI 로그인 토큰\/자격 증명을 기록하지 않습니다/);
 });
 
 test("위험 우회 플래그는 명시적 자동 승인 경로에만 있다", () => {

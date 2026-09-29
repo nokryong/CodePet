@@ -1,199 +1,205 @@
 # CodePet
 
-Codex, Google Antigravity(AGY), Claude Code, Grok의 작업 상태를 한곳에서 보여 주는 데스크톱 펫입니다. 네 프로그램의 대화를 동시에 감지해 말풍선으로 표시하고, 설정 창에서 계정·한도 지원 상태·말풍선 색상·글꼴을 관리합니다.
+**English** | [한국어](README.ko.md)
 
-Windows, Linux, macOS를 지원합니다. CLI 세션(Claude Code, Codex CLI, Grok)뿐 아니라 데스크톱 앱 세션도 감지합니다 — Claude 데스크톱 앱의 Claude Code 세션은 `~/.claude/projects`에, Codex 데스크톱 앱 세션은 `~/.codex/sessions`에 기록되므로 같은 감시 경로로 함께 잡힙니다.
+[Download the latest release](https://github.com/nokryong/CodePet/releases/latest) · [AppImage catalog](https://appimage.github.io/CodePet/)
 
-Codex CLI의 펫 에셋(`~/.codex/pets`)을 그대로 가져다 쓰기 때문에, Codex에서 펫을 설치해뒀다면 별도 설정 없이 바로 골라 쓸 수 있습니다.
+CodePet is a desktop pet that shows the activity of Codex, Google Antigravity (AGY), Claude Code, and Grok in one place. It watches conversations from all four tools at the same time, displays their activity in speech bubbles, and provides settings for accounts, usage-limit support, bubble colors, and fonts.
 
-## 실행
+It supports Windows, Linux, and macOS. CodePet detects both CLI sessions (Claude Code, Codex CLI, and Grok) and desktop-app sessions. Claude Code sessions created by the Claude desktop app are stored under `~/.claude/projects`, and Codex desktop-app sessions are stored under `~/.codex/sessions`, so the same watchers detect them automatically.
+
+CodePet also uses Codex CLI pet assets directly from `~/.codex/pets`. If you already installed pets in Codex, you can select them in CodePet without additional setup.
+
+## Run from source
 
 ```bash
 npm install
 npm run start
 ```
 
-실행 파일로 뽑으려면:
+To build a distributable package:
 
 ```bash
-npm run dist          # 현재 OS용 (Windows → exe, Linux → AppImage, macOS → dmg)
-npm run dist -- --win # Windows용 명시
-npm run dist -- --linux # Linux용 명시
-npm run dist -- --mac # macOS용 명시
+npm run dist            # Current OS (Windows → exe, Linux → AppImage, macOS → dmg)
+npm run dist -- --win   # Windows explicitly
+npm run dist -- --linux # Linux explicitly
+npm run dist -- --mac   # macOS explicitly
 ```
 
-Windows에서는 `artifacts/CodePet-<버전>.exe`, Linux에서는 `CodePet-<버전>-linux-<아키텍처>.AppImage`, macOS에서는 Intel과 Apple Silicon을 모두 지원하는 `CodePet-<버전>-mac-universal.dmg`가 나옵니다. 한 운영체제에서 세 플랫폼을 교차 빌드하지 않고, GitHub Actions의 `Release` 워크플로가 Windows·Ubuntu·macOS 네이티브 러너에서 각각 패키징합니다. `main` 푸시, 수동 실행, 태그(`v*`) 빌드가 끝나면 `.exe`, `.AppImage`, `.dmg`, `SHA256SUMS`를 합친 `CodePet-<커밋>-all-platforms` 아티팩트를 내려받을 수 있고, 태그 빌드는 같은 세 패키지를 GitHub Release에도 첨부합니다. 로컬 빌드는 앱을 끈 상태에서 돌려야 합니다(실행 중이면 파일 잠금 때문에 실패).
+Windows builds produce `artifacts/CodePet-<version>.exe`, Linux builds produce `CodePet-<version>-<architecture>.AppImage`, and macOS builds produce `CodePet-<version>-mac-universal.dmg` with both Intel and Apple Silicon support. The GitHub Actions `Release` workflow packages each platform on its native Windows, Ubuntu, or macOS runner instead of cross-compiling all three on one system. Builds triggered by a `main` push, a manual run, or a `v*` tag provide a `CodePet-<commit>-all-platforms` artifact containing the `.exe`, `.AppImage`, `.AppImage.zsync`, `.dmg`, and `SHA256SUMS` files. Tagged builds attach the same files to a GitHub Release. Close the app before building locally; an active process can keep package files locked.
 
-### 저장소와 배포 파일 범위
+GitHub Release AppImages are repacked with the current statically linked type-2 runtime, so the system does not need `libfuse2`. Each AppImage embeds update information for the latest stable release in `nokryong/CodePet`, and the release includes the `.zsync` file used by AppImageUpdate. The Electron payload requires `glibc 2.25` or newer. In a container or restricted environment where FUSE mounting is unavailable, run `./CodePet-<version>-x86_64.AppImage --appimage-extract-and-run`.
 
-- 저장소에는 실행 소스(`src`), 회귀 테스트(`test`), 3플랫폼 자동 빌드(`.github/workflows`), 빌드 스크립트와 실제 사용 아이콘만 둡니다.
-- `node_modules`, `artifacts`, 로그, 캐시, 임시 QA 이미지, 로컬 설정과 자격 증명은 `.gitignore`로 제외합니다.
-- 데스크톱 배포본에는 `src`의 런타임 파일과 앱 아이콘, 최소 `package.json`만 넣습니다. `test`, `scripts`, `.github`, README 같은 개발 파일과 중첩 Electron 의존성은 포함하지 않습니다.
-- npm 패키지에는 실행 소스, `code-pet` 실행 도우미, 런타임 아이콘만 추가합니다. npm이 패키지 식별과 라이선스 고지를 위해 자동으로 넣는 루트 `README.md`, `LICENSE`, `package.json`은 유지합니다.
+### Repository and package scope
 
-Linux에서 AGY 계정 자격 증명 저장을 사용하려면 Secret Service와 `secret-tool`이 필요합니다. Debian/Ubuntu 계열에서는 `libsecret-tools` 패키지가 이를 제공합니다. 자동 시작은 XDG autostart 항목으로 등록되고, 설치 글꼴은 fontconfig(`fc-list`)에서 읽습니다.
+- The repository contains runtime source (`src`), regression tests (`test`), three-platform automation (`.github/workflows`), build scripts, and the icons used by the app.
+- `node_modules`, `artifacts`, logs, caches, temporary QA images, local settings, and credentials are excluded through `.gitignore`.
+- Desktop packages contain the runtime files from `src`, app icons, and a minimal `package.json`. Development-only files such as `test`, `scripts`, `.github`, and README files, along with nested Electron dependencies, are not included.
+- The npm package includes the runtime source, the `code-pet` launcher, and runtime icons. The root `README.md`, `LICENSE`, and `package.json` files that npm adds for package identification and license disclosure remain included.
 
-Linux에서 Grok 워크스페이스 읽기·쓰기를 사용하려면 현재 사용자가 `docker info`를 `sudo` 없이 실행할 수 있어야 합니다. Docker CLI만 설치되어 있거나 daemon 소켓 권한이 없으면 CodePet은 이 모드를 사용 불가로 표시합니다.
+On Linux, AGY credential storage requires Secret Service and `secret-tool`. Debian and Ubuntu provide it through the `libsecret-tools` package. Auto-start uses an XDG autostart entry, and installed fonts are read through fontconfig (`fc-list`).
 
-Linux Wayland에서는 Electron의 창 절대 위치 제어가 지원되지 않으므로, XWayland `DISPLAY`가 있으면 CodePet이 펫 창만 X11 백엔드로 자동 실행해 항상 위와 자동 이동을 유지합니다. `--ozone-platform` 또는 `ELECTRON_OZONE_PLATFORM_HINT`를 사용자가 명시하면 그 설정을 우선합니다.
+Using Grok workspace read or write access on Linux requires the current user to run `docker info` without `sudo`. If only the Docker CLI is installed or the user cannot access the daemon socket, CodePet marks this mode unavailable.
 
-DevTools가 필요하면 이렇게 켜세요.
+Electron cannot control absolute window positions natively under Linux Wayland. When an XWayland `DISPLAY` is available, CodePet automatically launches only the pet window through the X11 backend to preserve always-on-top behavior and automatic movement. Explicit user settings through `--ozone-platform` or `ELECTRON_OZONE_PLATFORM_HINT` take precedence.
+
+To enable DevTools:
 
 ```powershell
 $env:PET_DEVTOOLS="1"
 npm run dev
 ```
 
-## 뭘 하는 앱인가
+## What CodePet does
 
-### 사용량 확인
+### Usage limits
 
-펫을 더블클릭하면 설정의 `한도` 화면이 열립니다. Codex, AGY, Claude의 현재 계정 한도와 Grok의 조회 지원 상태를 카드로 함께 표시하며 계정 전환 기능은 카드에 넣지 않습니다. Grok CLI 1.0.0은 계정 한도 조회 명령을 제공하지 않아 지원 불가로 명시합니다. Codex는 고정된 5시간 주기로 추정하지 않고 서버가 보내는 실제 기간을 읽어 5시간·주간·월간 한도와 모델별 추가 한도를 동적으로 표시합니다. 사용률이 70%를 넘으면 게이지가 노란색, 90%를 넘으면 빨간색이 됩니다.
+Double-click the pet to open the `한도` (Limits) page in Settings. Cards show current account limits for Codex, AGY, and Claude, plus whether Grok usage lookup is supported. Account switching is kept outside the cards. Grok CLI 1.0.0 does not expose an account-limit command, so CodePet reports it as unsupported. Codex does not assume a fixed five-hour cycle; it reads the actual server-provided periods and dynamically shows five-hour, weekly, monthly, and model-specific limits. Gauges turn yellow above 70% usage and red above 90%.
 
-Codex 사용률이 90%를 넘으면 초기화 주기당 한 번 경고 말풍선을 표시합니다.
+When Codex usage exceeds 90%, CodePet shows one warning bubble per reset period.
 
-### 계정 추가/전환/삭제
+### Add, switch, and delete accounts
 
-우클릭 메뉴와 시스템 트레이에서 Codex, AGY, Claude, Grok 모두 같은 형태의 저장 계정 목록과 `로그인 / 계정 추가` 항목을 제공합니다. 계정 삭제는 `설정…` → `계정`에서 할 수 있습니다.
+The context menu and system tray provide the same saved-account list and `로그인 / 계정 추가` (Sign in / Add account) action for Codex, AGY, Claude, and Grok. Delete accounts from `설정…` → `계정` (Settings → Accounts).
 
-- Codex: 별도 로그인 프로필에서 새 계정을 추가하고 저장된 인증 정보를 원자적으로 전환합니다. "Codex 재시작 없는 전환 (프록시)"는 기본으로 켜지며, 로컬 프록시(127.0.0.1)가 요청 단위로 계정 인증 헤더를 갈아끼워 계정 전환과 한도 소진 시 자동 로테이션을 재시작 없이 적용합니다. 우클릭 메뉴에서 프록시 모드를 명시적으로 끈 경우에만 기존의 Codex Desktop 재시작 방식으로 전환합니다. 프록시 모드를 켜고 끌 때 `~/.codex/config.toml` 루트에 `openai_base_url` 한 줄을 넣고 빼며(마커 주석으로 관리), 최초 활성화 직후 이미 실행 중이던 Codex에는 한 번의 재시작이 필요할 수 있습니다. 정상 종료 시 자동으로 원복되고, 강제 종료 뒤 Codex 연결이 막히면 CodePet을 다시 실행해 stale 마커를 정리하거나 `# codepet-codex-proxy` 블록을 제거하면 됩니다.
-- AGY: 현재 자격 증명(Windows 자격 증명 관리자 / Linux Secret Service / macOS Keychain)을 프로필로 저장하고, 확인 가능한 계정 이메일을 함께 기록한 뒤 선택한 계정으로 바꾸고 AGY를 다시 시작합니다.
-- Claude: 현재 Claude 자격 파일과 `claude auth status`의 이메일을 프로필로 저장하고 전환합니다. OAuth 토큰이 갱신돼도 같은 이메일은 한 계정으로 병합하며, 이미 열린 세션은 유지되고 새 세션부터 선택한 계정을 사용합니다.
-- Grok: `~/.grok/auth.json`의 현재 OAuth 계정을 프로필로 보존하고 원자적으로 전환합니다. Grok이 자격 파일을 hot reload하므로 실행 중인 CLI를 강제 종료하지 않으며 다음 API 호출부터 선택한 계정이 적용됩니다. 환경 변수 API 키나 외부 인증은 상태만 표시하고 프로필 파일로 복제하지 않습니다.
+- **Codex:** Add accounts through isolated login profiles and switch saved authentication data atomically. `Codex 재시작 없는 전환 (프록시)` (switch without restarting Codex) is enabled by default. A local proxy on `127.0.0.1` swaps authentication headers per request, enabling account changes and automatic rotation after a limit is exhausted without restarting Codex. The legacy Codex Desktop restart flow is used only when proxy mode is explicitly disabled from the context menu. Enabling or disabling proxy mode adds or removes one marked `openai_base_url` block at the root of `~/.codex/config.toml`. Codex instances that were already running may need one restart immediately after the first activation. A normal CodePet exit restores the original configuration automatically. If a forced exit leaves Codex unable to connect, start CodePet again to clean the stale marker or remove the `# codepet-codex-proxy` block.
+- **AGY:** Save the current credentials from Windows Credential Manager, Linux Secret Service, or macOS Keychain as a profile, record the account email when it can be verified, switch to the selected profile, and restart AGY.
+- **Claude:** Save and switch the current Claude credential file together with the email reported by `claude auth status`. Refreshed OAuth tokens with the same email are merged into one account. Existing sessions stay open, and new sessions use the selected account.
+- **Grok:** Preserve the current OAuth account from `~/.grok/auth.json` as a profile and switch it atomically. Grok hot-reloads the credential file, so CodePet does not terminate a running CLI; the selected account is used from the next API call. Environment-variable API keys and external authentication are shown as status only and are not copied into profile files.
 
-프로필 저장소는 `~/.codepet/codex-switch`, `~/.codepet/antigravity-switch`, `~/.codepet/claude-switch`, `~/.codepet/grok-switch`입니다. 설정 화면에는 비밀 값이 노출되지 않습니다.
+Profiles are stored under `~/.codepet/codex-switch`, `~/.codepet/antigravity-switch`, `~/.codepet/claude-switch`, and `~/.codepet/grok-switch`. Secret values are not displayed in Settings.
 
-현재 사용 중인 계정은 삭제할 수 없으며, 다른 계정으로 전환한 뒤 저장된 프로필만 삭제할 수 있습니다.
+The active account cannot be deleted. Switch to another account first, then delete the saved profile.
 
-### 작업 실시간 표시
+### Live activity display
 
-Codex의 `~/.codex/sessions`, AGY의 로컬 transcript, Claude의 프로젝트 JSONL, Grok의 `~/.grok/sessions/**/updates.jsonl`을 tail해 네 프로그램의 작업을 함께 감지합니다.
+CodePet tails Codex `~/.codex/sessions`, AGY local transcripts, Claude project JSONL files, and Grok `~/.grok/sessions/**/updates.jsonl` to track work across all four tools.
 
-- 작업 시작/응답 작성 → 펫이 살펴보기 모션으로 바뀜. Codex rollout에 확인된 Sol/Terra/Luna 모델 정보가 있으면 제목에 표시됩니다. 동시 대화는 공급자를 합쳐 시작 순서대로 최대 5개를 보여 주며, 각 제목 바로 아래에 해당 대화 내용이 표시됩니다.
-- 파일 수정, 명령, 테스트, 빌드 → 작업 중 모션과 현재 상태가 말풍선에 표시됨
-- Codex 사용자 입력 또는 실행 승인 대기 → 기다리기 모션으로 바뀜. 말풍선을 클릭하면 해당 Codex 대화를 바로 열 수 있음(세션 로그에 구조화 이벤트가 있을 때)
-- 작업 완료 → 폴짝 뛰고 마지막 메시지를 표시함. 완료 말풍선을 클릭하면 해당 Codex 채팅으로 이동함
-- 작업 중단 → 쓰러짐
+- Starting work or writing a response changes the pet to the review animation. When a Codex rollout contains verified Sol, Terra, or Luna model information, the model appears in the title. Concurrent conversations from all providers are combined in start order, up to five at once, with each conversation shown below its title.
+- File changes, commands, tests, and builds use the working animation and show the current state in the bubble.
+- Waiting for Codex user input or execution approval uses the waiting animation. Clicking the bubble opens that Codex conversation when the session log contains a structured navigation event.
+- Completed work makes the pet hop and displays the last message. Clicking the completion bubble opens the Codex chat.
+- Interrupted work makes the pet fall over.
 
-세션 여러 개를 동시에 돌려도 각각 추적하고, 완료 이벤트가 없는 작업은 공급자별 quiet-time 또는 stale 처리 뒤 원래 상태로 돌아옵니다.
+Multiple sessions are tracked independently. Work without a completion event returns to the normal state after provider-specific quiet-time or stale handling.
 
-말풍선 개인정보 수준은 설정의 `일반` 화면에서 선택합니다.
+Choose the bubble privacy level on the `일반` (General) page in Settings.
 
-- "전체 내용" — 요청, 중간 메시지, 파일명과 명령을 표시
-- "상태만" — 작업 중, 테스트 중, 승인 대기 같은 상태만 표시
-- "끄기" — 자동 작업 말풍선만 끔. 펫 모션은 그대로 동작
+- **Full content:** Show requests, intermediate messages, filenames, and commands.
+- **Status only:** Show states such as working, testing, or waiting for approval.
+- **Off:** Disable automatic activity bubbles while keeping pet animations active.
 
-### 에이전트 채팅방
+### Agent chat room
 
-우클릭 메뉴 또는 시스템 트레이의 "에이전트 채팅방…"에서 이 PC에 설치된 코딩 에이전트 CLI들을 단체 채팅방처럼 불러 대화할 수 있습니다.
+Open `에이전트 채팅방…` (Agent chat room) from the context menu or system tray to talk with coding-agent CLIs installed on this computer as if they were in a group chat.
 
-- **세션**: 왼쪽 사이드바에서 세션을 무제한 만들고, 이름을 바꾸고(더블클릭 또는 ✎), 휴지통으로 보내고(🗑, 30일 보관 후 정리), 클릭 한 번으로 전환합니다. 모든 대화는 `~/.code-pet`에 저장되어 앱을 재시작해도 그대로 복원됩니다. 첫 사용자 메시지가 자동으로 세션 제목이 됩니다.
-- **참여와 멘션**: 멘션 없이 보내면 세션에 참여 중인 모든 에이전트가 동시에 응답합니다. `@codex, @claude`처럼 멘션하면 그 대상만 호출하고, `@모두`/`@all`과 한국어 조사도 인식합니다. 에이전트 답변 속 `@이름`도 해당 에이전트를 실제로 호출하며, 무한 호출을 막기 위해 사용자 발화 기준 기본 2단계까지만 이어집니다. 코드 블록·인라인 코드·이메일 안의 `@`는 호출하지 않습니다.
-- **토론**: 참가자들이 한 턴씩 차례로 말하며, 새 기여·동의·패스·최종 결론을 스스로 구분합니다. 전원이 동의/패스하거나 결론이 나오면 일찍 끝나고, 끝나지 않더라도 총 실행 예산(기본 9턴)에서 멈춥니다.
-- **에이전트 설정**: 참가자 칩에서 세션별 참여 여부, CLI가 제공하는 모델 목록, 속도/노력, 도구 자동 승인을 고릅니다. 각 답변 헤더에는 실제 선택 모델·CLI 버전·추론 강도가 함께 저장되어 표시됩니다.
-- **리치 렌더링**: 답변의 코드 블록(언어 라벨 + 복사 버튼), 목록, 인라인 코드, 굵게, 링크가 안전하게 렌더링됩니다. HTML을 직접 삽입하지 않는 토큰 기반 렌더러라 에이전트 출력에 어떤 마크업이 있어도 스크립트로 해석되지 않습니다.
-- **캐릭터 이모티콘**: 에이전트가 답변마다 상황에 맞는 캐릭터 이모티콘을 1개 골라 붙입니다. 프롬프트에 이모티콘 의미 사전이 함께 전달되고, 답변 속 `[[CODEPET_EMOTE:키]]` 표기를 앱이 이미지로 바꿔 보여 줍니다(`src/chat-icon/emoticons`의 매니페스트 기반, 메시지당 최대 1개). 네 캐릭터 폴더는 매니페스트와 같은 이름의 256×256 RGBA PNG만 사용합니다. 코드 블록·인라인 코드 안의 표기는 무시합니다.
-- 각 응답은 headless 모드의 새 프로세스로 실행되며(대화 기록을 프롬프트로 전달), 로그인은 각 CLI에 이미 되어 있어야 합니다. 실행 중에는 상태/부분 출력이 실시간으로 표시됩니다.
-- 개발 중에는 `npx electron . --chat`으로 채팅 창을 바로 열 수 있습니다.
+- **Sessions:** Create unlimited sessions from the left sidebar, rename them by double-clicking or using the edit action, move them to trash for 30 days, and switch with one click. Conversations are stored under `~/.code-pet` and restored after an app restart. The first user message becomes the session title automatically.
+- **Participation and mentions:** Without a mention, every participating agent responds concurrently. Mentions such as `@codex, @claude` call only those agents. `@모두`, `@all`, and Korean particles attached to mentions are recognized. An `@name` in an agent response can call that agent for real, with a default two-step continuation limit per user message to prevent infinite loops. Mentions inside code blocks, inline code, and email addresses do not trigger calls.
+- **Discussion:** Participants speak one turn at a time and distinguish new contributions, agreement, passing, and a final conclusion. Discussion stops early when everyone agrees or passes, or when a conclusion is reached. Otherwise it stops at the total execution budget, which defaults to nine turns.
+- **Agent settings:** Participant chips control session participation, the model list exposed by each CLI, speed or reasoning effort, and tool auto-approval. Each response header stores and displays the actual selected model, CLI version, and reasoning effort.
+- **Rich rendering:** Code blocks with language labels and copy buttons, lists, inline code, bold text, and links are rendered safely. The token-based renderer never inserts raw HTML, so markup from an agent response is not interpreted as a script.
+- **Character emotes:** Each agent can choose one context-appropriate character emote per response. The prompt receives an emote dictionary, and the app replaces `[[CODEPET_EMOTE:key]]` markers with images. The manifest under `src/chat-icon/emoticons` controls the mapping, with a maximum of one emote per message. Each of the four character directories accepts only 256×256 RGBA PNG files whose names match the manifest. Markers inside code blocks or inline code are ignored.
+- Every response runs in a fresh headless process with conversation history passed in the prompt. Each CLI must already be signed in. Status and partial output appear while the process is running.
+- During development, open the chat window directly with `npx electron . --chat`.
 
-지원 CLI와 실행 방식(검증된 플래그만 사용):
+Supported CLIs and verified invocation modes:
 
-| 에이전트 | 실행 | 모델 선택 | 속도/노력 |
+| Agent | Invocation | Model selection | Speed / effort |
 |---|---|---|---|
-| Claude Code | `claude -p --output-format stream-json` | 설치된 CLI `--help`가 안내하는 alias/full-name 목록 | `--effort` (low~max) |
-| Codex CLI | `codex exec --json --ephemeral` | `app-server`의 `model/list` 라우팅 목록 | 선택 모델이 광고하는 reasoning effort |
-| Antigravity | `agy --sandbox --output-format stream-json … --print <prompt>` | `agy models`의 실제 목록 | `--effort` (low/medium/high) |
-| Grok | `grok --prompt-file … --output-format streaming-messages-json` | `grok models`의 실제 목록 | `--effort` (low/medium/high) |
+| Claude Code | `claude -p --output-format stream-json` | Alias and full-name list documented by the installed CLI's `--help` | `--effort` (low–max) |
+| Codex CLI | `codex exec --json --ephemeral` | Routing list from app-server `model/list` | Reasoning effort advertised by the selected model |
+| Antigravity | `agy --sandbox --output-format stream-json … --print <prompt>` | Actual list from `agy models` | `--effort` (low/medium/high) |
+| Grok | `grok --prompt-file … --output-format streaming-messages-json` | Actual list from `grok models` | `--effort` (low/medium/high) |
 
-설치되지 않은 CLI는 참가자 칩이 흐리게 표시되고, 칩을 클릭하면 설치 안내가 나옵니다. 채팅을 처음 열면 "에이전트 환경 진단"이 한 번 표시되어 CLI 설치·버전·로그인 상태를 확인합니다. 이후에는 사이드바의 "환경 진단" 또는 "CLI 다시 탐지"로 앱 재시작 없이 다시 확인할 수 있습니다. Codex와 Claude는 전용 상태 명령으로, Grok은 `grok models`의 인증 문구로 로그인을 확인하며, 상태 명령이 없는 CLI는 "자동 확인 불가"로 구분합니다.
+An unavailable CLI appears as a dimmed participant chip. Clicking it shows installation guidance. The first time the chat opens, `에이전트 환경 진단` (Agent environment diagnostics) checks CLI installation, version, and sign-in status. Later, use `환경 진단` (Environment diagnostics) or `CLI 다시 탐지` (Detect CLIs again) from the sidebar without restarting the app. Codex and Claude use dedicated status commands, Grok checks authentication text from `grok models`, and CLIs without a status command are marked as not automatically verifiable.
 
-#### 워크스페이스와 권한
+#### Workspaces and permissions
 
-세션마다 워크스페이스 폴더와 권한 모드를 정합니다. 폴더는 OS 폴더 선택 대화상자로만 지정할 수 있습니다(경로 문자열을 직접 입력받지 않습니다).
+Each session has its own workspace folder and permission mode. Workspaces can be chosen only through the operating system's folder picker; arbitrary path strings are not accepted.
 
-- **대화만 (기본)** — 도구/파일 접근 없이 순수 대화. Claude는 `--tools ""`, Codex는 읽기 전용 샌드박스 + 빈 작업 폴더, agy는 `--mode plan --sandbox`, Grok은 도구 allowlist와 웹·서브에이전트 차단 정책으로 실행됩니다.
-- **워크스페이스 읽기** — 선택한 폴더를 읽기/검색만. Claude는 `--tools "Read,Grep,Glob"`, Codex는 `--sandbox read-only --cd`, agy는 `--mode plan --sandbox --add-dir`, Grok은 Windows·Linux의 Docker Linux 컨테이너를 사용합니다.
-- **워크스페이스 쓰기** — 명시적으로 켜야 하며, 기본은 Claude `acceptEdits`, Codex `workspace-write` 샌드박스, agy `accept-edits`입니다. Grok은 Docker 내부 복제본만 수정하고, 사용자가 변경 파일과 diff를 확인해 `전체 적용`을 눌러야 원본에 반영됩니다. 추가 권한이 거부되면 CodePet이 승인창을 띄우고, 승인 시 해당 턴 전체를 자동 승인으로 한 번 다시 실행합니다.
+- **Chat only (default):** Pure conversation without tools or file access. Claude uses `--tools ""`, Codex uses a read-only sandbox with an empty working directory, AGY uses `--mode plan --sandbox`, and Grok uses a tool allowlist with web access and subagents blocked.
+- **Workspace read:** Read and search only within the selected folder. Claude uses `--tools "Read,Grep,Glob"`, Codex uses `--sandbox read-only --cd`, AGY uses `--mode plan --sandbox --add-dir`, and Grok uses a Docker Linux container on Windows and Linux.
+- **Workspace write:** Must be enabled explicitly. The defaults are Claude `acceptEdits`, Codex `workspace-write`, and AGY `accept-edits`. Grok modifies only an isolated Docker copy. The user must review changed files and the diff, then choose `전체 적용` (Apply all) before changes reach the original workspace. If an additional permission request is denied, CodePet opens an approval dialog and can rerun that entire turn once with auto-approval after confirmation.
 
-Grok은 운영체제의 네이티브 파일 권한 경계 대신 Docker 격리 실행기로만 워크스페이스를 접근합니다. Docker의 Linux 컨테이너 백엔드가 사용 가능하면 CodePet이 공식 `@xai-official/grok@1.0.0` 이미지를 최초 1회 준비합니다. 읽기는 선택한 프로젝트 하나만 `/workspace:ro`로 노출합니다. 쓰기는 원본을 `/workspace-src:ro`로 유지한 채 최대 64MiB를 실행마다 128MiB tmpfs 복제본으로 옮기며, `.git`, `node_modules`, 빌드 산출물 등은 복사하지 않습니다. Grok에는 전용 읽기·편집 도구만 제공하고 인증 파일을 우회해 읽을 수 있는 Bash는 차단합니다.
+Grok accesses workspaces only through an isolated Docker runner, not through native operating-system file permissions. When a Docker Linux backend is available, CodePet prepares the official `@xai-official/grok@1.0.0` image once. Read mode exposes only the selected project at `/workspace:ro`. Write mode keeps the original at `/workspace-src:ro` and copies up to 64 MiB into a 128 MiB tmpfs for each run, excluding `.git`, `node_modules`, build artifacts, and similar files. Grok receives dedicated read and edit tools; Bash is blocked so it cannot bypass the authentication-file boundary.
 
-쓰기 컨테이너가 끝나면 최대 32개·합계 1MiB의 구조화된 내용 스냅숏과 표시용 diff만 호스트 앱에 전달됩니다. 원본 경로·정션/심링크·특수 파일·원본 해시를 앱이 다시 검증하고, 승인은 한 번만 사용할 수 있으며 15분 뒤 만료됩니다. 적용 도중 실패하면 같은 워크스페이스 안의 임시 백업으로 되돌립니다. Linux에서는 이미 로그인된 `~/.grok/auth.json`을 네트워크가 차단된 준비 컨테이너의 stdin으로 전달해 OS 사용자별 전용 `codepet-grok-auth-v1-<hash>` 볼륨에 자동 동기화하므로 별도의 Docker 로그인이 필요 없습니다. Windows에서는 기존 Docker 전용 로그인도 유지합니다. 호스트 홈·다른 드라이브·`/mnt/host`·`docker.sock`은 작업 컨테이너에 마운트하지 않습니다. 원격 Docker context는 인증이나 워크스페이스를 보내기 전에 거부합니다. 인증 볼륨 경로는 Grok의 Linux `bubblewrap` deny 규칙으로 작업 도구에서 숨깁니다. 이를 위해 작업 컨테이너에서는 Docker 기본 seccomp 프로필만 해제하지만 비루트 실행, `cap-drop=ALL`, `no-new-privileges`, 읽기 전용 루트와 원본 마운트는 유지합니다.
+After a write container exits, only structured content snapshots for up to 32 files and 1 MiB total, plus display diffs, are returned to the host app. CodePet revalidates original paths, junctions and symlinks, special files, and original hashes. An approval can be used once and expires after 15 minutes. If applying changes fails, CodePet restores from a temporary backup in the same workspace. On Linux, the already authenticated `~/.grok/auth.json` is passed through stdin to a network-disabled preparation container and synchronized to an OS-user-specific `codepet-grok-auth-v1-<hash>` volume, so a separate Docker login is unnecessary. Existing Docker-specific login behavior remains available on Windows. The host home directory, other drives, `/mnt/host`, and `docker.sock` are never mounted into a work container. Remote Docker contexts are rejected before credentials or workspace content are sent. Grok's Linux `bubblewrap` deny rules hide the authentication volume from work tools. The work container disables only Docker's default seccomp profile while preserving non-root execution, `cap-drop=ALL`, `no-new-privileges`, a read-only root, and the read-only original mount.
 
-각 에이전트의 **도구 자동 승인**은 워크스페이스 쓰기 모드에서만 별도로 켤 수 있으며, 경고 확인 뒤 해당 CLI의 전체 승인 플래그를 사용합니다. 신뢰하는 폴더에서만 사용해야 합니다.
+Each agent's **tool auto-approval** can be enabled separately only in workspace-write mode. After a warning is confirmed, CodePet uses that CLI's full-approval flag. Enable it only for folders you trust.
 
-#### 첨부 파일
+#### Attachments
 
-＋ 버튼 또는 드래그&드롭으로 이미지와 일반 파일을 첨부할 수 있습니다. 채팅 입력창에 스크린샷 이미지를 붙여넣어도 바로 첨부됩니다(파일당 20MiB, 세션당 200MiB).
+Attach images and regular files with the ＋ button, drag and drop, or by pasting a screenshot into the chat input. Limits are 20 MiB per file and 200 MiB per session.
 
-- 첨부는 세션 폴더로 복사되어 원본을 지워도 대화 기록이 깨지지 않습니다. 형식은 매직 바이트로 판별하고, 실행 파일류는 거부합니다.
-- 이미지: Codex는 `--image`로 직접 전달, Claude는 읽기 권한이 있을 때 경로로 전달합니다. agy와 Grok은 검증된 이미지 전달 경로가 없어 전달되지 않습니다. Grok에는 한도 안의 작은 텍스트 첨부만 인라인됩니다.
-- 전달되지 못한 첨부는 조용히 사라지지 않고 해당 답변에 배지로 표시됩니다.
+- Attachments are copied into the session directory, so deleting the original does not break conversation history. File types are detected by magic bytes, and executable formats are rejected.
+- Images are passed directly to Codex with `--image` and to Claude by path when read permission is available. AGY and Grok do not have a verified image-delivery path, so images are not sent to them. Small text attachments within the limit can be inlined for Grok.
+- An attachment that could not be delivered is shown as a badge on the corresponding response instead of disappearing silently.
 
-#### `.code-pet` 저장소와 개인정보
+#### `.code-pet` storage and privacy
 
-채팅 데이터는 홈 폴더의 `~/.code-pet`(환경 변수 `CODE_PET_HOME`으로 변경 가능)에 저장됩니다.
+Chat data is stored under `~/.code-pet` in the home directory. Set `CODE_PET_HOME` to use another location.
 
 ```
 ~/.code-pet/
-  config.json              # 앱 설정·CLI 탐지 캐시 (자격 증명 없음)
-  sessions/<id>/meta.json  # 세션 제목·워크스페이스·권한·에이전트 설정
-  sessions/<id>/transcript.jsonl   # 대화 기록 (추가 전용)
-  sessions/<id>/attachments/       # 첨부 사본 (내용 해시 이름)
-  trash/                   # 삭제된 세션 (30일 보관)
+  config.json                       # App settings and CLI detection cache; no credentials
+  sessions/<id>/meta.json           # Session title, workspace, permissions, and agent settings
+  sessions/<id>/transcript.jsonl    # Append-only conversation history
+  sessions/<id>/attachments/        # Attachment copies named by content hash
+  trash/                             # Deleted sessions retained for 30 days
 ```
 
-- 프롬프트, 응답, 워크스페이스 경로, 첨부 사본이 **로컬에만** 저장됩니다. CodePet이 이 데이터를 외부로 전송하지 않습니다.
-- 채팅 저장소에는 CLI 로그인 토큰/자격 증명을 기록하지 않습니다. 사용자가 계정 전환 기능을 쓰면 각 공급자의 인증 파일 사본은 권한을 제한한 `~/.codepet/*-switch` 프로필에 로컬 저장됩니다.
-- Claude와 Codex 프롬프트는 stdin으로, Grok 프롬프트는 실행 종료 시 삭제되는 권한 제한 임시 파일로 전달합니다. `agy` 1.1.10은 비대화형 프롬프트를 argv로만 받기 때문에 AGY 응답이 실행되는 동안에는 운영체제의 프로세스 목록에 프롬프트가 일시적으로 보일 수 있습니다. CodePet은 Windows 명령줄 한도를 피하도록 긴 AGY 대화의 앞부분을 자동으로 축약합니다.
-- 세션 삭제는 휴지통 이동이며 30일 뒤 정리됩니다. 앱을 삭제해도 `~/.code-pet`은 남으므로, 완전히 지우려면 폴더를 직접 삭제하세요.
-- 쓰기는 임시 파일 + 교체(rename) 방식이라 도중에 꺼져도 기존 데이터가 깨지지 않고, 더 새로운 버전이 만든 저장소는 읽기 전용으로만 엽니다.
+- Prompts, responses, workspace paths, and attachment copies are stored **only on the local machine**. CodePet does not send this data anywhere else.
+- The chat store never records CLI login tokens or credentials. If account switching is used, copies of provider authentication files are stored locally in permission-restricted `~/.codepet/*-switch` profiles.
+- Claude and Codex prompts are passed through stdin. Grok prompts use a permission-restricted temporary file that is deleted when the process exits. AGY 1.1.10 accepts non-interactive prompts only through argv, so a prompt can appear temporarily in the operating system's process list while AGY is responding. CodePet automatically truncates the beginning of very long AGY conversations to stay within the Windows command-line limit.
+- Deleting a session moves it to trash, where it is removed after 30 days. Uninstalling the app does not remove `~/.code-pet`; delete the directory manually to erase it completely.
+- Writes use a temporary file followed by an atomic rename, so an interrupted process does not corrupt the previous data. Stores created by a newer version open in read-only mode.
 
-#### Antigravity: IDE와 `agy` CLI는 별개입니다
+#### Antigravity: the IDE and `agy` CLI are separate
 
-Antigravity **IDE**(GUI 앱)가 설치되어 있어도 채팅에는 **`agy` CLI**가 따로 필요합니다. CodePet은 PATH와 함께 공식 설치 경로(`%LOCALAPPDATA%\agy\bin\agy.exe`)도 탐색하므로, CLI를 설치했다면 PATH에 없어도 "CLI 다시 탐지"로 바로 인식됩니다. IDE만 있는 경우 칩에 "GUI만 설치됨" 안내가 나오며, GUI 실행 파일을 CLI처럼 실행하지는 않습니다.
+The Antigravity **IDE** desktop app does not include the **`agy` CLI** required by Agent chat. CodePet searches both `PATH` and the official installation path (`%LOCALAPPDATA%\agy\bin\agy.exe`), so an installed CLI can be found immediately with `CLI 다시 탐지` even when it is not on `PATH`. When only the IDE is present, the participant chip reports that only the GUI is installed. CodePet never attempts to run the GUI executable as a CLI.
 
-펫과 채팅은 하나의 `code-pet` npm 패키지와 데스크톱 배포판으로 공개합니다. 채팅 코어의 대부분은 Electron과 분리된 순수 Node 모듈로 유지합니다. 세션 저장 구조(추가 전용 JSONL)와 권한 어휘는 Apache-2.0으로 공개된 [openai/codex](https://github.com/openai/codex)의 설계에서 영감을 받았으며, 코드/자산은 복사하지 않았습니다.
+The pet and chat features are published together as one `code-pet` npm package and one desktop distribution. Most of the chat core remains in pure Node modules independent of Electron. The append-only JSONL session layout and permission vocabulary were inspired by the Apache-2.0-licensed design of [openai/codex](https://github.com/openai/codex); no code or assets were copied.
 
-### 화면 설정
+### Appearance
 
-설정의 `일반` 화면에서 말풍선 배경색과 글자색을 직접 고를 수 있습니다. 글자색은 본문뿐 아니라 모델명과 작업 상태 제목에도 함께 적용됩니다. 설치된 시스템 글꼴(Windows 레지스트리 / Linux fontconfig / macOS 폰트 폴더)을 검색하고 10~20px 글자 크기와 함께 선택하면 설정 미리보기와 말풍선에 적용됩니다.
+On the `일반` (General) page in Settings, choose the bubble background and text colors directly. The text color applies to model names and activity-state titles as well as the message body. CodePet searches installed system fonts through the Windows registry, Linux fontconfig, or macOS font directories. The selected font and a size from 10 to 20 px are applied to both the preview and live bubbles.
 
-### 펫 바꾸기
+### Change the pet
 
-우클릭 → "펫 바꾸기"에서 고르면 즉시 바뀌고, 선택은 다음 실행 때도 유지됩니다. 목록에 나오는 순서는:
+Choose `펫 바꾸기` (Change pet) from the context menu to switch immediately. The selection persists across launches. Pets appear in this order:
 
-1. exe 옆 `pet/spritesheet.webp` — 직접 만든 스프라이트를 쓰고 싶을 때
-2. `~/.codex/pets`에 설치된 펫들 — Codex에서 펫을 추가하면 여기에도 자동으로 나타남
-3. 내장 기본 펫
+1. `pet/spritesheet.webp` next to the executable, for a custom sprite sheet.
+2. Pets installed under `~/.codex/pets`; new Codex pets appear automatically.
+3. The built-in default pet.
 
-## 조작법
+## Controls
 
-| 동작 | 반응 |
+| Action | Result |
 |---|---|
-| 클릭 | 인사 |
-| 더블클릭 | 점프 + 설정의 한도 화면 열기 |
-| 드래그 | 창 이동 |
-| 드래그 종료 / 크기 조절 종료 | 현재 위치와 크기를 저장하고, 다음 실행 때 현재 화면 안에서 복원 |
-| 우클릭 | 메뉴 (설정, 계정, 펫 바꾸기, 모션, 일시정지, 마우스 따라가기, 자동 실행, 숨기기 등) |
-| 시스템 트레이 | 설정, 보이기, 숨기기, 계정, 펫 바꾸기, 완전 종료 |
-| 완료·입력 대기·승인 대기 말풍선 클릭 | 해당 Codex 채팅 열기 |
-| 그 외 말풍선 클릭 | 닫기 |
+| Click | Wave |
+| Double-click | Jump and open the Limits page in Settings |
+| Drag | Move the window |
+| Finish dragging or resizing | Save the current position and size, then restore them within the current display on the next launch |
+| Right-click | Open the menu for Settings, accounts, pet selection, animations, movement pause, mouse following, auto-start, hiding, and more |
+| System tray | Open Settings, show or hide the pet, manage accounts and pets, or quit completely |
+| Click a completion, input-waiting, or approval-waiting bubble | Open the corresponding Codex chat |
+| Click any other bubble | Close it |
 
-우클릭 메뉴의 "숨기기"는 창만 감추고 앱은 시스템 트레이에 남깁니다. 완전히 끄려면 시스템 트레이 아이콘을 우클릭해서 "완전 종료"를 누르면 됩니다.
+`숨기기` (Hide) in the context menu hides only the window; the app stays in the system tray. To stop it completely, right-click the tray icon and choose `완전 종료` (Quit completely).
 
-`이동 일시 정지`와 `마우스 따라가기` 상태는 설정 파일에 저장되므로 앱을 다시 실행하거나 재부팅해도 유지됩니다.
+The `이동 일시 정지` (Pause movement) and `마우스 따라가기` (Follow mouse) states are saved in the settings file and persist after restarting the app or computer.
 
-우클릭 메뉴의 "로그인 시 자동 실행"을 켜면 로그인할 때 같이 뜹니다.
+Enable `로그인 시 자동 실행` (Launch at login) from the context menu to start CodePet when you sign in.
 
-## 커스텀 스프라이트 만들기
+## Custom sprite sheets
 
-Codex 펫 스프라이트 규격을 그대로 따르며 v1과 v2를 모두 자동 인식합니다.
+CodePet follows the Codex pet sprite format and detects both v1 and v2 automatically.
 
-- v1: 전체 크기 1536x1872, 셀 192x208의 8열 x 9행 그리드
-- v2: 전체 크기 1536x2288, 셀 192x208의 8열 x 11행 그리드
-- row가 상태, column이 프레임
+- **v1:** 1536×1872 total, an 8-column × 9-row grid of 192×208 cells.
+- **v2:** 1536×2288 total, an 8-column × 11-row grid of 192×208 cells.
+- Rows represent states and columns represent frames.
 
-| row | 상태 | v1 프레임 수 | v2 프레임 수 |
+| Row | State | v1 frames | v2 frames |
 |---:|---|---:|---:|
 | 0 | idle | 6 | 6 |
 | 1 | runningRight | 8 | 8 |
@@ -204,28 +210,28 @@ Codex 펫 스프라이트 규격을 그대로 따르며 v1과 v2를 모두 자�
 | 6 | waiting | 8 | 6 |
 | 7 | running | 8 | 6 |
 | 8 | review | 8 | 6 |
-| 9 | look directions A | - | 8 |
-| 10 | look directions B | - | 8 |
+| 9 | look directions A | — | 8 |
+| 10 | look directions B | — | 8 |
 
-v2의 row 9~10에는 시계 방향의 시선 방향 16개가 들어갑니다. 현재 CodePet은 row 0~8의 기본 애니메이션을 재생하고 row 9~10은 시트를 올바르게 자르기 위한 v2 레이아웃으로 인식합니다.
+Rows 9 and 10 in v2 contain 16 clockwise look directions. CodePet currently plays the standard animations from rows 0 through 8 and recognizes rows 9 and 10 as part of the v2 layout so the sheet is sliced correctly.
 
-이미지 크기가 정상 규격이면 높이로 9행/11행을 자동 판별합니다. 이미지 비율을 판별할 수 없을 때는 같은 폴더의 `pet.json`에 있는 `spriteVersionNumber`를 fallback으로 사용합니다.
+When the image has a standard size, CodePet detects the 9-row or 11-row layout from its height. If the image ratio cannot be identified, it falls back to `spriteVersionNumber` in the `pet.json` file beside the image.
 
-이 규격으로 만든 `spritesheet.webp`를 exe 옆 `pet/` 폴더에 넣으면 메뉴에 "커스텀"으로 나타납니다.
+Place a compatible `spritesheet.webp` under a `pet/` directory next to the executable. It appears as `커스텀` (Custom) in the menu.
 
-## 코드 구조
+## Code structure
 
-- `src/main.js` — 창 관리, 이동 로직, 메뉴, 말풍선 제어. 이동 속도나 말풍선 크기 같은 값은 상단의 `MOVEMENT_CONFIG`, `BUBBLE_CONFIG`에 모여 있음
-- `src/codex-watcher.js`, `antigravity-watcher.js`, `claude-watcher.js`, `grok-watcher.js` — 네 프로그램의 로컬 작업 로그 감시
-- `src/codex-account-switcher.js`, `antigravity-account-switcher.js`, `claude-account-switcher.js`, `grok-account-switcher.js` — 공급자별 계정 저장/전환/삭제
-- `src/account-submenu.js` — Codex·AGY·Claude·Grok 공통 계정 메뉴 구성
-- `src/codex-usage-label.js` — Codex 서버 한도 기간과 모델 범위에 맞는 표시 이름 생성
-- `src/provider-usage.js` — AGY·Claude 한도 조회 및 정규화. Grok은 CLI가 한도 조회를 제공하지 않아 설정에서 지원 상태만 표시
-- `src/settings.html` / `settings.js` — 설정, 계정, 한도 화면
-- `src/providers/provider-capabilities.js` — 프로바이더 CLI 탐지·검증·능력(모델/노력/권한) 공개. 펫과 채팅이 공유
-- `src/providers/provider-diagnostics.js` — GUI와 `code-pet doctor`가 공유하는 설치·로그인 진단 결과 계약
-- `src/chat/` — 에이전트 채팅방 코어(멘션 파싱, 그룹챗 프롬프트, 실행 인자 생성, CLI 실행, 이벤트 정규화, 세션 저장소, 첨부, 이모티콘, 룸 오케스트레이션). `chat-window.js`/`chat-ipc.js` 외에는 Electron 비의존
-- `src/chat.html` / `chat.js` / `chat-markdown.js` — 에이전트 채팅방 창과 안전한 리치 렌더러
-- `bin/code-pet.js` — 실행 도우미. `code-pet doctor`로 CLI 상태를 점검(자격 증명 출력 없음)
-- `src/renderer.js` — 스프라이트 애니메이션 재생. 상태 정의는 `PET_STATES`
-- `src/bubble.html` / `bubble.js` — 통합 작업 말풍선
+- `src/main.js` — Window management, movement, menus, and speech-bubble control. Values such as movement speed and bubble size are grouped under `MOVEMENT_CONFIG` and `BUBBLE_CONFIG` near the top.
+- `src/codex-watcher.js`, `antigravity-watcher.js`, `claude-watcher.js`, `grok-watcher.js` — Watch the four providers' local activity logs.
+- `src/codex-account-switcher.js`, `antigravity-account-switcher.js`, `claude-account-switcher.js`, `grok-account-switcher.js` — Save, switch, and delete provider accounts.
+- `src/account-submenu.js` — Builds the shared account menu for Codex, AGY, Claude, and Grok.
+- `src/codex-usage-label.js` — Generates display labels for Codex server limit periods and model scopes.
+- `src/provider-usage.js` — Retrieves and normalizes AGY and Claude limits. Grok does not expose limit lookup in its CLI, so Settings shows support status only.
+- `src/settings.html` / `settings.js` — Settings, Accounts, and Limits pages.
+- `src/providers/provider-capabilities.js` — Detects and validates provider CLIs and exposes models, effort levels, and permission capabilities shared by the pet and chat.
+- `src/providers/provider-diagnostics.js` — Defines the installation and sign-in diagnostic contract shared by the GUI and `code-pet doctor`.
+- `src/chat/` — Agent chat core: mention parsing, group-chat prompts, invocation arguments, CLI execution, event normalization, session storage, attachments, emotes, and room orchestration. Everything except `chat-window.js` and `chat-ipc.js` is independent of Electron.
+- `src/chat.html` / `chat.js` / `chat-markdown.js` — Agent chat window and safe rich-text renderer.
+- `bin/code-pet.js` — Launcher. Run `code-pet doctor` to check CLI status without printing credentials.
+- `src/renderer.js` — Sprite animation playback. State definitions live in `PET_STATES`.
+- `src/bubble.html` / `bubble.js` — Unified activity speech bubble.

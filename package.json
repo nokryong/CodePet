@@ -88,7 +88,7 @@
       "target": [
         "AppImage"
       ],
-      "artifactName": "CodePet-${version}-linux-${arch}.${ext}"
+      "artifactName": "CodePet-${version}-${arch}.${ext}"
     }
   },
   "optionalDependencies": {

@@ -22,7 +22,7 @@ test("release packaging defines one native package for Windows, Linux, and macOS
     { target: "dmg", arch: ["universal"] },
   ]);
   assert.equal(packageJson.build.portable.artifactName, "CodePet-${version}.exe");
-  assert.equal(packageJson.build.linux.artifactName, "CodePet-${version}-linux-${arch}.${ext}");
+  assert.equal(packageJson.build.linux.artifactName, "CodePet-${version}-${arch}.${ext}");
   assert.equal(
     packageJson.build.mac.artifactName,
     "CodePet-${version}-mac-universal.${ext}"
@@ -40,12 +40,25 @@ test("build script selects Linux on Linux and accepts an explicit Linux target",
 test("release workflow builds three native runners and uploads all three packages", () => {
   assert.match(releaseWorkflow, /push:[\s\S]*branches:[\s\S]*- main/);
   assert.match(releaseWorkflow, /windows-latest[\s\S]*artifacts\/\*\.exe/);
-  assert.match(releaseWorkflow, /ubuntu-latest[\s\S]*artifacts\/\*\.AppImage/);
+  assert.match(releaseWorkflow, /ubuntu-latest[\s\S]*artifacts\/\*\.AppImage\*/);
   assert.match(releaseWorkflow, /macos-latest[\s\S]*artifacts\/\*\.dmg/);
   assert.match(releaseWorkflow, /actions\/upload-artifact@v4/);
   assert.match(releaseWorkflow, /actions\/download-artifact@v4/);
   assert.match(releaseWorkflow, /CodePet-\$\{\{ github\.sha \}\}-all-platforms/);
-  assert.match(releaseWorkflow, /sha256sum CodePet-\*\.exe CodePet-\*\.AppImage CodePet-\*\.dmg/);
+  assert.match(
+    releaseWorkflow,
+    /sha256sum CodePet-\*\.exe CodePet-\*\.AppImage CodePet-\*\.AppImage\.zsync CodePet-\*\.dmg/
+  );
+  assert.match(
+    releaseWorkflow,
+    /gh-releases-zsync\|nokryong\|CodePet\|latest\|CodePet-\*-x86_64\.AppImage\.zsync/
+  );
+  assert.match(releaseWorkflow, /appimagetool-x86_64\.AppImage/);
+  assert.match(releaseWorkflow, /appimagetool\/releases\/download\/1\.9\.1/);
+  assert.match(releaseWorkflow, /ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0/);
+  assert.match(releaseWorkflow, /generated_zsync=.*find \./);
+  assert.match(releaseWorkflow, /mv "\$generated_zsync" "\$expected_zsync"/);
+  assert.match(releaseWorkflow, /--appimage-updateinformation/);
   assert.match(releaseWorkflow, /gh release upload/);
   assert.match(releaseWorkflow, /gh release create[^\n]+--draft/);
   assert.match(releaseWorkflow, /gh release edit[^\n]+--draft=false/);

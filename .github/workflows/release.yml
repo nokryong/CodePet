@@ -1,0 +1,156 @@
+name: Release
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: --win
+            file: artifacts/*.exe
+          - os: ubuntu-latest
+            target: --linux
+            file: artifacts/*.AppImage*
+          - os: macos-latest
+            target: --mac
+            file: artifacts/*.dmg
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run dist -- ${{ matrix.target }}
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      - name: Configure the packaged Electron sandbox helper
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo chown root:root artifacts/linux-unpacked/chrome-sandbox
+          sudo chmod 4755 artifacts/linux-unpacked/chrome-sandbox
+          test "$(stat -c '%U:%G %a' artifacts/linux-unpacked/chrome-sandbox)" = "root:root 4755"
+      - name: Smoke-test the packaged Linux app
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set +e
+          timeout 15s xvfb-run -a artifacts/linux-unpacked/code-pet
+          status=$?
+          set -e
+          if [ "$status" -ne 0 ] && [ "$status" -ne 124 ]; then
+            exit "$status"
+          fi
+      - name: Embed AppImage update information
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          appimage="$(find artifacts -maxdepth 1 -type f -name 'CodePet-*.AppImage' -print -quit)"
+          test -n "$appimage"
+          chmod +x "$appimage"
+
+          workdir="$(mktemp -d)"
+          trap 'rm -rf "$workdir"' EXIT
+          (
+            cd "$workdir"
+            "$GITHUB_WORKSPACE/$appimage" --appimage-extract >/dev/null
+          )
+
+          curl -fsSL --retry 3 \
+            -o "$workdir/appimagetool-x86_64.AppImage" \
+            https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
+          echo 'ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0  appimagetool-x86_64.AppImage' \
+            | (cd "$workdir" && sha256sum -c -)
+          chmod +x "$workdir/appimagetool-x86_64.AppImage"
+          rm -f "$appimage" "$appimage.zsync"
+          APPIMAGE_EXTRACT_AND_RUN=1 "$workdir/appimagetool-x86_64.AppImage" \
+            -u 'gh-releases-zsync|nokryong|CodePet|latest|CodePet-*-x86_64.AppImage.zsync' \
+            "$workdir/squashfs-root" "$appimage"
+
+          expected_zsync="$appimage.zsync"
+          generated_zsync="$(find . -maxdepth 2 -type f -name "$(basename "$appimage").zsync" -print -quit)"
+          test -n "$generated_zsync"
+          if [ "$generated_zsync" != "$expected_zsync" ]; then
+            mv "$generated_zsync" "$expected_zsync"
+          fi
+          test -s "$appimage"
+          test -s "$expected_zsync"
+          update_info="$("$appimage" --appimage-updateinformation)"
+          printf 'AppImage update information: %s\n' "$update_info"
+          test "$update_info" = 'gh-releases-zsync|nokryong|CodePet|latest|CodePet-*-x86_64.AppImage.zsync'
+      - name: Preserve the native package
+        uses: actions/upload-artifact@v4
+        with:
+          name: CodePet-native-${{ runner.os }}-${{ github.sha }}
+          path: ${{ matrix.file }}
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+      - name: Upload the native package to a draft GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          if ! gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release create "${GITHUB_REF_NAME}" --draft --generate-notes || true
+          fi
+          for attempt in 1 2 3 4 5; do
+            gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 && break
+            sleep 2
+          done
+          gh release upload "${GITHUB_REF_NAME}" ${{ matrix.file }} --clobber
+
+  collect:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all three native packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: CodePet-native-*
+          path: artifacts
+          merge-multiple: true
+      - name: Generate checksums
+        working-directory: artifacts
+        shell: bash
+        run: sha256sum CodePet-*.exe CodePet-*.AppImage CodePet-*.AppImage.zsync CodePet-*.dmg > SHA256SUMS
+      - name: Preserve the complete three-platform bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: CodePet-${{ github.sha }}-all-platforms
+          path: |
+            artifacts/CodePet-*.exe
+            artifacts/CodePet-*.AppImage
+            artifacts/CodePet-*.AppImage.zsync
+            artifacts/CodePet-*.dmg
+            artifacts/SHA256SUMS
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build, collect]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish the complete three-platform GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "${GITHUB_REF_NAME}" --draft=false
