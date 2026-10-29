@@ -6,7 +6,7 @@ const path = require('node:path');
 const { execFileSync, spawnSync } = require('node:child_process');
 
 // Execute the actual metadata step with local Git history and a fake read-only gh.
-const workflow = fs.readFileSync(path.join(__dirname, '../.github/workflows/release.yml'), 'utf8');
+const workflow = fs.readFileSync(path.join(__dirname, '../.github/workflows/release.yml'), 'utf8').replace(/\r\n/g, '\n');
 const metadata = workflow.split('      - id: release\n')[1].split('\n  build:')[0];
 const script = metadata.split('        run: |\n')[1].split('\n').map(line => line.replace(/^          /, '')).join('\n');
 const shell = process.platform === 'win32'
