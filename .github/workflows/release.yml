@@ -40,19 +40,24 @@ jobs:
             exit 1
           fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          if git show-ref --verify --quiet "refs/tags/$tag"; then
-            test "$(git rev-parse "$tag^{commit}")" = "$GITHUB_SHA"
-          fi
           if gh release view "$tag" --json isDraft --jq '.isDraft' > release-state.txt; then
+            # A public version is immutable; later main commits do not republish it.
+            if [[ "$(cat release-state.txt)" == false ]]; then
+              echo "publish=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            test "$(cat release-state.txt)" = true
             target="$(gh release view "$tag" --json targetCommitish --jq '.targetCommitish')"
             test "$target" = "$GITHUB_SHA"
-            echo "publish=$(cat release-state.txt)" >> "$GITHUB_OUTPUT"
           else
             # Distinguish a new version from authentication or network errors.
             gh api "repos/$GITHUB_REPOSITORY/releases" --paginate --jq '.[].tag_name' > release-tags.txt
             if grep -Fxq "$tag" release-tags.txt; then exit 1; fi
-            echo "publish=true" >> "$GITHUB_OUTPUT"
           fi
+          if git show-ref --verify --quiet "refs/tags/$tag"; then
+            test "$(git rev-parse "$tag^{commit}")" = "$GITHUB_SHA"
+          fi
+          echo "publish=true" >> "$GITHUB_OUTPUT"
 
   build:
     needs: metadata
