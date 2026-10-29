@@ -1,5 +1,23 @@
 # Release notes / 릴리즈 노트
 
+## 1.2.2 — 2026-10-29
+
+### English
+
+- Improve cancellation and owned-process cleanup; retain partial output and diagnostics without reporting failed work as successful.
+- Repair interrupted JSONL appends, recover incomplete indexes, preserve deletion records, and enforce one writer per chat store.
+- Refuse to reclaim foreign or unknown writer hosts. Chat storage requires a local filesystem with hard-link support; network/shared folders are unsupported.
+- Forward repeated launches to the existing instance and move transcript searches to a worker.
+- Skip already-published versions while retaining strict release identity checks, and add Windows/macOS package readiness and IPC smoke validation.
+
+### 한국어
+
+- 취소와 소유 프로세스 정리를 개선하고, 실패한 작업을 성공으로 표시하지 않으면서 부분 출력과 진단 정보를 보존합니다.
+- 중단된 JSONL 추가 기록과 불완전한 인덱스를 복구하고, 삭제 기록을 보존하며 채팅 저장소의 writer를 하나로 제한합니다.
+- 다른 호스트나 소유 호스트를 알 수 없는 잠금은 회수하지 않습니다. 채팅 저장소는 하드 링크를 지원하는 로컬 파일시스템을 사용해야 하며 네트워크·공유 폴더는 지원하지 않습니다.
+- 반복 실행을 기존 인스턴스로 전달하고 대화 검색을 worker로 옮겼습니다.
+- 이미 공개된 버전은 건너뛰되 실제 발행 대상 검증은 유지하며, Windows·macOS 패키지의 준비 상태와 IPC 확인을 추가했습니다.
+
 ## 1.2.1 — 2026-10-28
 
 ### English
