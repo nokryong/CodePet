@@ -22,6 +22,7 @@ async function main() {
     build,
     targets: resolveTargetPlatform().createTarget(),
     keepLinuxUnpacked: process.env.CODEPET_LINUX_SMOKE_TEST === "1",
+    validatePackage: ["win32", "darwin"].includes(process.platform) ? require("./smoke-package").smokePackage : null,
   });
 }
 

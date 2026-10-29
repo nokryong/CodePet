@@ -111,7 +111,7 @@ function compactArgvPrompt(prompt, limit = MAX_ARGV_PROMPT_CHARS) {
 }
 
 function killTree(child, platform = process.platform, spawnKiller = spawn) {
-  if (!child || child.killed || child.exitCode !== null) return;
+  if (!child || child.exitCode !== null || child.signalCode != null) return;
   if (platform === "win32") {
     // shell(cmd.exe) 경유 실행 시 자식까지 함께 종료해야 합니다.
     let fallbackTimer;
@@ -135,6 +135,22 @@ function killTree(child, platform = process.platform, spawnKiller = spawn) {
   } else {
     child.kill("SIGTERM");
   }
+}
+
+function groupRunning(pid, platform) {
+  if (platform === "linux") {
+    for (const name of fs.readdirSync("/proc")) {
+      if (!/^\d+$/.test(name)) continue;
+      try {
+        const stat = fs.readFileSync(`/proc/${name}/stat`, "utf8");
+        const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+        if (Number(fields[2]) === pid && fields[0] !== "Z") return true;
+      } catch (error) { if (!["ENOENT", "ESRCH"].includes(error.code)) throw error; }
+    }
+    return false;
+  }
+  try { process.kill(-pid, 0); return true; }
+  catch (error) { if (error.code === "ESRCH") return false; throw error; }
 }
 
 // 프로바이더 프로세스 1회 실행.
@@ -162,25 +178,58 @@ function runAgentProcess({
   provider = "",
   runId = "",
   onCancel = null,
+  cancelGraceMs = 500,
 }) {
   let child = null;
   let settled = false;
   let cancelled = false;
+  let userCancelled = false;
   let timer = null;
   let promptFile = null;
   let cancelCleanupStarted = false;
+  let cancellation = null;
+  let cancelCleanup = Promise.resolve();
+  let closing;
+  const closed = new Promise((resolve) => { closing = resolve; });
 
   const requestCancelCleanup = () => {
     if (cancelCleanupStarted || typeof onCancel !== "function") return;
     cancelCleanupStarted = true;
     try {
-      Promise.resolve(onCancel()).catch(() => {});
-    } catch {}
+      cancelCleanup = Promise.resolve(onCancel());
+      cancelCleanup.catch(() => {});
+    } catch (error) { cancelCleanup = Promise.reject(error); cancelCleanup.catch(() => {}); }
   };
 
   const terminate = () => {
+    if (cancellation) return cancellation;
     requestCancelCleanup();
-    killTree(child, platform);
+    child?.stdout?.resume();
+    child?.stderr?.resume();
+    cancellation = (async () => {
+      if (!child?.pid) { await cancelCleanup; return; }
+      if (platform === "win32") {
+        killTree(child, platform);
+        await closed;
+      } else {
+        const signalGroup = (signal) => {
+          try { process.kill(-child.pid, signal); return true; }
+          catch (error) { if (error.code === "ESRCH") return false; throw error; }
+        };
+        signalGroup("SIGTERM");
+        await new Promise((resolve) => setTimeout(resolve, cancelGraceMs));
+        signalGroup("SIGKILL");
+        await closed;
+        const deadline = Date.now() + 2000;
+        while (groupRunning(child.pid, platform)) {
+          if (Date.now() >= deadline) throw new Error("프로세스 그룹 종료를 확인하지 못했습니다.");
+          await new Promise(resolve => setTimeout(resolve, 20));
+        }
+      }
+      await cancelCleanup;
+    })();
+    cancellation.catch(() => {});
+    return cancellation;
   };
 
   const cleanup = () => {
@@ -199,9 +248,13 @@ function runAgentProcess({
   };
 
   const promise = new Promise((resolve) => {
-    const finish = (result) => {
+    const finish = async (result) => {
       if (settled) return;
       settled = true;
+      result = { status: result.ok ? "completed" : result.text ? "partial" : "failed", ...result };
+      if (userCancelled) result = { ...result, ok: false, cancelled: true, status: "cancelled" };
+      try { await cancellation; }
+      catch (error) { result = { ...result, ok: false, error: redactSensitiveText(error.message) }; }
       cleanup();
       resolve(result);
     };
@@ -238,6 +291,7 @@ function runAgentProcess({
         env,
         shell: Boolean(needsShell),
         windowsHide: true,
+        detached: platform !== "win32",
         stdio: ["pipe", "pipe", "pipe"],
       });
     } catch (error) {
@@ -260,7 +314,7 @@ function runAgentProcess({
     const stderrDecoder = new StringDecoder("utf8");
 
     const emit = (event) => {
-      if (!event || settled) return;
+      if (!event || settled || cancelled) return;
       if (event.kind === "workspace-change-manifest") {
         parsedWorkspaceChangeManifest = event.manifest;
         return;
@@ -314,7 +368,7 @@ function runAgentProcess({
     };
 
     child.stdout.on("data", (chunk) => {
-      if (settled) return;
+      if (settled || cancelled) return;
       const text = stdoutDecoder.write(chunk);
       stdoutBytes += chunk.length;
       if (Number.isFinite(maxOutputBytes) && maxOutputBytes > 0 && stdoutBytes > maxOutputBytes) {
@@ -325,6 +379,7 @@ function runAgentProcess({
       }
       if (!parseLine) stdout = textTail(stdout, text);
       handleLines(text);
+      if (cancelled || settled) return;
       const traceWrites = parseLine?.flushTraces?.();
       if (traceWrites) {
         // Let the pipe provide backpressure while batched trace writes finish.
@@ -337,12 +392,15 @@ function runAgentProcess({
       if (!settled) stderr = textTail(stderr, stderrDecoder.write(chunk), MAX_STDERR_BYTES);
     });
     child.on("error", (error) => {
+      if (!child.pid) closing();
+      else terminate();
       finish({ ok: false, error: `실행 실패: ${error.message}` });
     });
     child.on("close", (code) => {
+      closing();
       if (settled) return;
       if (cancelled) {
-        finish({ ok: false, error: "중지됨", cancelled: true });
+        finish({ ok: false, status: "cancelled", error: "중지됨", cancelled: true });
         return;
       }
       const stdoutTail = stdoutDecoder.end();
@@ -374,6 +432,9 @@ function runAgentProcess({
       const failWith = (partial) => {
         finish({
           ...partial,
+          text,
+          exitCode: code,
+          status: text ? "partial" : "failed",
           diagnostics: buildRunDiagnostics({
             provider,
             runId,
@@ -397,6 +458,8 @@ function runAgentProcess({
       if (code === 0 && text) {
         finish({
           ok: true,
+          status: "completed",
+          exitCode: code,
           text,
           ...(parsedWorkspaceChangeManifest ? { workspaceChangeManifest: parsedWorkspaceChangeManifest } : {}),
         });
@@ -416,15 +479,6 @@ function runAgentProcess({
             // 사용자에게 보이는 문구이므로 민감정보를 제거해 담습니다.
             detail: `종료 코드 ${code} · ${redactSensitiveText(permissionText).slice(-2000)}`,
           },
-        });
-        return;
-      }
-      // 4) 비정상 종료라도 사용 가능한 답변이 있으면 기존처럼 성공으로 둡니다.
-      if (text) {
-        finish({
-          ok: true,
-          text,
-          ...(parsedWorkspaceChangeManifest ? { workspaceChangeManifest: parsedWorkspaceChangeManifest } : {}),
         });
         return;
       }
@@ -448,6 +502,8 @@ function runAgentProcess({
   });
 
   const cancel = () => {
+    if (settled || cancelled) return;
+    userCancelled = true;
     cancelled = true;
     terminate();
   };

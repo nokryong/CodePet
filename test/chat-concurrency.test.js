@@ -2,6 +2,19 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { ChatRoom } = require('../src/chat/chat-room');
 const tick = () => new Promise(resolve => setImmediate(resolve));
+
+test('a failed partial answer remains visibly failed and cannot delegate work', async () => {
+  const {room, calls} = harness();
+  room.sendUserMessage('@codex work');
+  calls[0].finish({ok:false, status:'partial', exitCode:7, text:'@agy partial work', error:'exit 7'});
+  await room.waitForIdle();
+  const message = room.messages.at(-1);
+  assert.equal(message.error, true);
+  assert.equal(message.status, 'partial');
+  assert.match(message.text, /partial work/);
+  assert.match(message.text, /exit 7/);
+  assert.equal(calls.length, 1);
+});
 const agents = ['claude', 'codex', 'agy', 'codex-2'].map(id => ({
   id, name: id, aliases: [id], available: true, enabled: true,
 }));

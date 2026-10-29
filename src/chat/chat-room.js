@@ -533,7 +533,7 @@ class ChatRoom extends EventEmitter {
       }
       if (generation !== this.generation || result?.cancelled) return;
       emitEvent({ kind: "run-end", ok: Boolean(result?.ok) });
-      if (!result?.approvalRequired || agent.autoApprove || approvedRetry) break;
+      if (!result?.approvalRequired || result?.text || result?.sideEffectsPossible || agent.autoApprove || approvedRetry) break;
       const approved = await this.requestApproval(agent, result.approval);
       if (generation !== this.generation) return;
       if (!approved) {
@@ -555,10 +555,12 @@ class ChatRoom extends EventEmitter {
       this.appendMessage({
         authorType: "agent",
         author: agent.id,
-        text: describeRunFailure(result, {
+        text: [result?.text, describeRunFailure(result, {
           autoApprove: Boolean(agent.autoApprove),
           approvedRetry,
-        }),
+        })].filter(Boolean).join("\n\n"),
+        status: result?.status || "failed",
+        exitCode: result?.exitCode,
         error: true,
         runId,
         ...(diagnostics ? { diagnostics } : {}),

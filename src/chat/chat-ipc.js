@@ -134,6 +134,7 @@ function createChatFeature(options) {
   const { ipcMain, dialog, BrowserWindow, shell } = electron;
 
   let store = null;
+  const pendingProcesses = new Set();
   let codexRuntime = null;
   const codexRooms = new Map();
   const indexedRooms = new Set();
@@ -201,7 +202,7 @@ function createChatFeature(options) {
   function ensureStore() {
     if (store || storeError) return store;
     try {
-      store = new ChatStore({ root: options.storeRoot }).init();
+      store = options.store || new ChatStore({ root: options.storeRoot }).init();
       codexRuntime = options.codexRuntime || new CodexChatRuntime({ root: path.join(store.root, "runtime", "codex"), platform: options.platform });
       if (!store.readOnly) traceStore = new ChatTraceStore({ root: store.root, hasSession: (id) => store.hasSession(id) });
     } catch (error) {
@@ -442,6 +443,7 @@ function createChatFeature(options) {
 
           const nativeSessions = new Set();
           let linkError = null;
+          let performedWork = false;
           const processRun = runAgentProcess({
             commandPath: execution.commandPath,
             needsShell: execution.needsShell,
@@ -452,7 +454,11 @@ function createChatFeature(options) {
             promptFileFlag: execution.promptFileFlag,
             cwd: execution.cwd,
             outputFile,
-            parseLine: createLineParser(providerId, onTrace, (cliSessionId) => {
+            parseLine: createLineParser(providerId, (event) => {
+              performedWork = true;
+              if (!cancelled) native.delivered(throughId);
+              return onTrace(event);
+            }, (cliSessionId) => {
               if (cancelled) return;
               if (nativeSessions.has(cliSessionId)) return;
               nativeSessions.add(cliSessionId);
@@ -466,21 +472,28 @@ function createChatFeature(options) {
                 home,
               });
             }),
-            onEvent,
+            onEvent: (event) => {
+              if (!cancelled && ["delta", "final"].includes(event?.kind)) native.delivered(throughId);
+              onEvent(event);
+            },
             timeoutMs: options.timeoutMs,
             maxOutputBytes: execution.maxOutputBytes,
             provider: providerId,
             runId,
             onCancel: execution.onCancel,
           });
-          return { ...processRun, promise: processRun.promise.then((result) => {
+          const completion = processRun.promise.then((result) => {
+            result = { ...result, sideEffectsPossible: performedWork };
             if (linkError) return { ...result, ok: false, error: linkError.message };
             if (result.ok && !result.cancelled && !cancelled) native.delivered(throughId);
             return result;
           }).finally(async () => {
-            runtime?.finish();
-            await account?.finish?.(providerId === "grok" && permissionMode !== "chat" ? docker : null);
-          }) };
+            try { await runtime?.finish(); }
+            finally { await account?.finish?.(providerId === "grok" && permissionMode !== "chat" ? docker : null); }
+          });
+          pendingProcesses.add(completion);
+          completion.then(() => pendingProcesses.delete(completion), () => pendingProcesses.delete(completion));
+          return { ...processRun, promise: completion };
         },
       });
       return {
@@ -734,7 +747,7 @@ function createChatFeature(options) {
       wrap(async ({ query }) => {
         if (!ensureStore()) return { results: [] };
         const cleanQuery = typeof query === "string" ? query.trim() : "";
-        return { results: cleanQuery ? store.searchSessions(cleanQuery) : [] };
+        return { results: cleanQuery ? await store.searchSessionsAsync(cleanQuery) : [] };
       })
     );
 
@@ -1217,6 +1230,9 @@ function createChatFeature(options) {
         room.stopAllSilently();
       } catch {}
     }
+    const release = () => { if (!options.store) store?.close(); };
+    if (!pendingProcesses.size) { release(); return Promise.resolve(); }
+    return Promise.allSettled([...pendingProcesses]).then(release);
   }
 
   return { registerIpcHandlers, openWindow, getWindow, findCodexSession, shutdown };

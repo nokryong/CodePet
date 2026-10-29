@@ -116,6 +116,8 @@ For a custom pet, place `spritesheet.webp` in a `pet/` folder beside the executa
 
 Agent-chat conversations, attachment copies, and local task traces are stored in `~/.code-pet`. Set `CODE_PET_HOME` to change the location. Uninstalling the app leaves this folder in place. Deleting a chat also removes its traces.
 
+Use a local folder on a filesystem that supports hard links for the chat store. Network/shared folders are not supported: writer recovery uses local process IDs and hostnames, which cannot reliably distinguish machines with duplicate names or separate PID namespaces. A lock belonging to another or unknown host is left intact; verify that no writer is active before attempting recovery. Do not remove a lock while another instance is using the store.
+
 In agent chats, each participant resumes its native CLI session within the same chat, including after an app restart. Changing the account, working directory, permissions, model, or reasoning setting starts a new session. Saved-account participants use their own profile; deleting an agent chat does not delete native CLI history.
 
 Live stores completed voice transcripts, typed messages, and its dedicated Codex sessions separately under `~/.codepet/live`, with history separated by account. Select a saved conversation in Live to continue after reopening the app. Earlier voice conversations may have no transcript if it was not recorded. Deleting a Live conversation removes its local message contents and its dedicated Codex thread.

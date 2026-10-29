@@ -29,7 +29,7 @@ function createDroppedAttachmentHarness(t) {
     on() {},
   };
   const feature = createChatFeature({
-    storeRoot,
+    store, storeRoot,
     electron: {
       ipcMain,
       dialog: {},

@@ -54,6 +54,7 @@ function launchApp(extraArgs) {
   }
   const child = spawn(electronPath, [APP_ROOT, ...extraArgs], {
     detached: true,
+    windowsHide: true,
     stdio: "ignore",
   });
   child.unref();

@@ -1,0 +1,21 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const {EventEmitter} = require('node:events');
+const {claimInstance} = require('../src/app-instance');
+test('secondary launch flags queue until ready and store roots use separate instance identities', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(),'codepet-instance-'));
+  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  const app = new EventEmitter(); let identity; const routed=[];
+  app.getPath=()=>root; app.setPath=(_name,value)=>{identity=value;};
+  app.requestSingleInstanceLock=()=>true;
+  const ready=claimInstance(app,path.join(root,'one'), argv=>routed.push(argv));
+  const first=identity;
+  for(const flag of ['--chat','--settings','--live','--usage']) app.emit('second-instance',{},[flag]);
+  assert.equal(routed.length,0); ready(); assert.equal(routed.length,4);
+  claimInstance(app,path.join(root,'two'),()=>{}); assert.notEqual(first,identity);
+  let quit=false; app.quit=()=>{quit=true;}; app.requestSingleInstanceLock=()=>false;
+  assert.equal(claimInstance(app,path.join(root,'one'),()=>{}),null); assert.equal(quit,true);
+});

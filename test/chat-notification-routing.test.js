@@ -23,7 +23,7 @@ function fixture(t) {
     show() { this.shown = true; } focus() { this.focused = true; }
   }
   const handlers = new Map();
-  const feature = createChatFeature({ storeRoot: root, electron: { BrowserWindow: Window, dialog: {}, shell: {},
+  const feature = createChatFeature({ store, storeRoot: root, electron: { BrowserWindow: Window, dialog: {}, shell: {},
     ipcMain: { handle: (name, handler) => handlers.set(name, handler), on() {} } } });
   t.after(() => feature.shutdown());
   feature.registerIpcHandlers();
@@ -34,13 +34,13 @@ test("notifications select the exact room in new and minimized existing chat win
   const f = fixture(t);
   const win = f.feature.openWindow(f.first);
   win.emit("ready-to-show");
-  assert.equal(new ChatStore({ root: f.store.root }).init().getConfig().activeSessionId, f.first);
+  assert.equal(JSON.parse(fs.readFileSync(f.store.configPath(), "utf8")).activeSessionId, f.first);
   assert.deepEqual(f.sent.at(-1), { channel: "chat:open-session", data: { sessionId: f.first } });
   win.minimized = true;
   assert.equal(f.feature.openWindow(f.second), win);
   assert.equal(win.minimized, false); assert.equal(win.focused, true);
   assert.deepEqual(f.sent.at(-1), { channel: "chat:open-session", data: { sessionId: f.second } });
-  assert.equal(new ChatStore({ root: f.store.root }).init().getConfig().activeSessionId, f.second);
+  assert.equal(JSON.parse(fs.readFileSync(f.store.configPath(), "utf8")).activeSessionId, f.second);
   const count = f.sent.length;
   assert.equal(f.feature.openWindow("../../not-a-room"), null);
   assert.equal(f.sent.length, count);

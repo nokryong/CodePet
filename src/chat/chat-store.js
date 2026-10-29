@@ -1,7 +1,7 @@
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { readMessagePage } = require("./chat-history");
+const { readMessagePage, repairAppendBoundary } = require("./chat-history");
 
 // .code-pet 저장소 스키마 버전. 더 새로운 버전이 만든 데이터를 만나면
 // 데이터를 깨뜨리지 않도록 읽기 전용으로 동작합니다.
@@ -148,6 +148,8 @@ class ChatStore {
 
   init() {
     if (this.initialized) return this;
+    this.releaseWriter = require("./chat-writer-lock").acquireWriter(this.root);
+    try {
     fs.mkdirSync(this.sessionsRoot(), { recursive: true });
     fs.mkdirSync(this.trashRoot(), { recursive: true });
     fs.mkdirSync(this.runtimeChatDir(), { recursive: true });
@@ -169,13 +171,18 @@ class ChatStore {
     this.purgeTrash();
     this.initialized = true;
     return this;
+    } catch (error) { this.close(); throw error; }
+  }
+
+  close() {
+    this.releaseWriter?.();
+    this.releaseWriter = null;
+    this.readOnly = true;
   }
 
   persistConfig() {
     if (this.readOnly) return;
-    try {
-      writeJsonAtomic(this.configPath(), this.config);
-    } catch {}
+    writeJsonAtomic(this.configPath(), this.config);
   }
 
   getConfig() {
@@ -190,6 +197,7 @@ class ChatStore {
 
   loadIndex() {
     const index = readJsonSafe(this.indexPath());
+    if (Number(index?.schemaVersion) > STORE_SCHEMA_VERSION) this.readOnly = true;
     if (
       index &&
       typeof index === "object" &&
@@ -197,6 +205,7 @@ class ChatStore {
       Number(index.schemaVersion) <= STORE_SCHEMA_VERSION
     ) {
       this.index = index;
+      this.rebuildIndex();
       return;
     }
     this.rebuildIndex();
@@ -212,6 +221,7 @@ class ChatStore {
       ids = [];
     }
     for (const id of ids) {
+      if (fs.existsSync(path.join(this.sessionDir(id), "trash.json"))) continue;
       const meta = readJsonSafe(this.metaPath(id));
       if (!meta || meta.id !== id) continue;
       sessions.push(this.indexEntryFrom(meta));
@@ -235,9 +245,7 @@ class ChatStore {
 
   persistIndex() {
     if (this.readOnly) return;
-    try {
-      writeJsonAtomic(this.indexPath(), this.index);
-    } catch {}
+    writeJsonAtomic(this.indexPath(), this.index);
   }
 
   listSessions() {
@@ -253,9 +261,7 @@ class ChatStore {
 
     for (const session of this.listSessions()) {
       let sessionMatches = 0;
-      const messages = this.readMessages(session.id);
-      for (let index = messages.length - 1; index >= 0; index -= 1) {
-        const message = messages[index];
+      for (const message of require("./chat-history").reverseMessages(this.transcriptPath(session.id))) {
         if (!message || message.authorType === "system") continue;
         const text = normalizeSearchText(message.text);
         if (!text) continue;
@@ -275,6 +281,19 @@ class ChatStore {
       }
     }
     return results;
+  }
+
+  searchSessionsAsync(query) {
+    if (typeof query !== "string" || !query.trim()) return Promise.resolve([]);
+    const { Worker } = require("node:worker_threads");
+    return new Promise((resolve, reject) => {
+      const worker = new Worker(path.join(__dirname, "chat-search-worker.js"), {
+        workerData: { root: this.root, sessions: this.listSessions(), query },
+      });
+      worker.once("message", resolve);
+      worker.once("error", reject);
+      worker.once("exit", code => { if (code !== 0) reject(new Error(`Search worker exited ${code}`)); });
+    });
   }
 
   hasSession(id) {
@@ -339,6 +358,7 @@ class ChatStore {
     if (!meta) return null;
     if (this.readOnly || meta.readOnly) return null;
     const entry = { v: 1, ts: this.now(), ...event };
+    repairAppendBoundary(this.transcriptPath(id));
     fs.appendFileSync(this.transcriptPath(id), `${JSON.stringify(entry)}\n`, "utf8");
 
     const patch = {};
@@ -412,6 +432,7 @@ class ChatStore {
       return false;
     }
     const target = path.join(this.trashRoot(), id);
+    writeJsonAtomic(path.join(source, "trash.json"), { deletedAt: this.now() });
     fs.rmSync(target, { recursive: true, force: true });
     try {
       fs.renameSync(source, target);
@@ -454,6 +475,7 @@ class ChatStore {
     const source = path.join(this.trashRoot(), id);
     const target = this.sessionDir(id);
     if (!fs.existsSync(source) || fs.existsSync(target)) return null;
+    if (Number(readJsonSafe(path.join(source, "meta.json"))?.schemaVersion) > STORE_SCHEMA_VERSION) return null;
     try {
       fs.renameSync(source, target);
     } catch {

@@ -15,7 +15,7 @@ test("chat:send는 replyTo를 메인 프로세스 정제 후 저장소까지 전
   const sessionId = store.createSession({}).id;
   const handlers = new Map();
   const feature = createChatFeature({
-    storeRoot,
+    store, storeRoot,
     electron: {
       ipcMain: {
         handle(channel, handler) {
@@ -46,7 +46,7 @@ test("chat:send는 replyTo를 메인 프로세스 정제 후 저장소까지 전
   });
 
   assert.equal(result.ok, true);
-  const [message] = new ChatStore({ root: storeRoot }).init().readMessages(sessionId);
+  const [message] = store.readMessages(sessionId);
   assert.equal(message.text, "IPC 인용 답장");
   assert.deepEqual(message.replyTo, {
     messageId: "m-source",

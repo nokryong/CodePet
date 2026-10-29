@@ -17,7 +17,7 @@ function removeBuildDirectory(outputDir, directory) {
   fs.rmSync(directory, { recursive: true, force: true });
 }
 
-async function buildReleaseArtifacts({ projectDir, outputDir, build, targets, keepLinuxUnpacked = false }) {
+async function buildReleaseArtifacts({ projectDir, outputDir, build, targets, keepLinuxUnpacked = false, validatePackage = null }) {
   fs.mkdirSync(outputDir, { recursive: true });
   const stage = fs.mkdtempSync(path.join(outputDir, ".build-"));
   try {
@@ -26,6 +26,7 @@ async function buildReleaseArtifacts({ projectDir, outputDir, build, targets, ke
       .filter((entry) => entry.isFile() && RELEASE_FILE.test(entry.name))
       .map((entry) => entry.name);
     if (!files.length) throw new Error("The build did not produce a release package.");
+    if (validatePackage) for (const name of files) await validatePackage(path.join(stage, name));
 
     const unpacked = path.join(stage, "linux-unpacked");
     const smokeDir = path.join(outputDir, "linux-unpacked");

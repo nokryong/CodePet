@@ -89,7 +89,7 @@ test("내보내기 IPC가 저장 위치를 묻고 최신 세션 내용을 UTF-8�
   const handlers = new Map();
   let saveOptions = null;
   const feature = createChatFeature({
-    storeRoot,
+    store, storeRoot,
     electron: {
       ipcMain: {
         handle(channel, handler) {

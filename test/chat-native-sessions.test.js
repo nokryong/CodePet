@@ -27,6 +27,7 @@ test("native links survive restart, isolate participants/rooms/scopes, and rejec
   const id = randomUUID();
   const first = new NativeSessionLink(store, room, "codex", scope);
   first.observe(id); first.delivered("m1");
+  store.close();
   const reopened = new NativeSessionLink(new ChatStore({ root: store.root }).init(), room, "codex", scope);
   assert.equal(reopened.cliSessionId, id);
   assert.equal(reopened.lastMessageId, "m1");
@@ -100,7 +101,7 @@ async function setup(t, providerId, behavior) {
   t.after(() => { delete require.cache[modulePath]; });
   const { createChatFeature } = require(modulePath);
   const handlers = new Map();
-  const options = { storeRoot: store.root, platform: "linux", env: { CODEX_HOME: path.join(store.root, "source-codex") }, electron: { ipcMain: { handle: (name, handler) => handlers.set(name, handler), on() {} }, dialog: {}, BrowserWindow: class {}, shell: {} } };
+  const options = { store, storeRoot: store.root, platform: "linux", env: { CODEX_HOME: path.join(store.root, "source-codex") }, electron: { ipcMain: { handle: (name, handler) => handlers.set(name, handler), on() {} }, dialog: {}, BrowserWindow: class {}, shell: {} } };
   let feature;
   const restart = () => { feature?.shutdown(); feature = createChatFeature(options); feature.registerIpcHandlers(); };
   restart();
@@ -121,6 +122,18 @@ async function setup(t, providerId, behavior) {
   };
   return { store, calls, invoke, send, restart, sessionId };
 }
+
+test("partial failure resumes without replaying the previously consumed user input", async t => {
+  const {calls,send} = await setup(t,"codex", ({input,calls}) => {
+    if(calls.length === 1) {
+      input.onEvent({kind:"delta",text:"partial"});
+      return {ok:false,text:"partial",status:"partial",error:"exit 7",exitCode:7};
+    }
+  });
+  assert.equal((await send("already-consumed-secret")).error,true);
+  assert.ok(!(await send("continue-after-failure")).error);
+  assert.doesNotMatch(calls[1].prompt,/already-consumed-secret/);
+});
 
 for (const providerId of ["codex", "claude", "agy", "grok"]) test(`${providerId}: same native session across turns/restart, with incremental prompts`, async t => {
   const { store, calls, invoke, send, restart, sessionId } = await setup(t, providerId);

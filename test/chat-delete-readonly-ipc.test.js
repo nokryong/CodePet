@@ -23,6 +23,7 @@ for (const mode of ["session", "store", "writable"]) {
     t.mock.method(ChatTraceStore.prototype, "discard", async () => { traceDiscards++; });
     t.mock.method(GrokDockerRuntime.prototype, "discardSessionChanges", () => { changeDiscards++; });
     const handlers = new Map();
+    store.close();
     const feature = createChatFeature({ storeRoot: root, electron: {
       ipcMain: { handle: (name, handler) => handlers.set(name, handler), on() {} },
       dialog: {}, BrowserWindow: class {}, shell: {},

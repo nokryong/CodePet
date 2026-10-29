@@ -102,7 +102,7 @@ test("기록 IPC는 세션·커서를 검증하고 첨부 내부 경로를 노�
     }],
   } });
   const handlers = new Map();
-  const feature = createChatFeature({ storeRoot: store.root, electron: {
+  const feature = createChatFeature({ store, storeRoot: store.root, electron: {
     ipcMain: { handle: (name, handler) => handlers.set(name, handler), on() {} },
     dialog: {}, BrowserWindow: class {}, shell: {},
   } });
@@ -129,7 +129,7 @@ test("최근 페이지 밖의 오래된 이미지 첨부도 미리볼 수 있다
   fs.writeFileSync(store.transcriptPath(id), messages.map((message) =>
     JSON.stringify({ kind: "message", message })).join("\n") + "\n");
   const handlers = new Map();
-  createChatFeature({ storeRoot: store.root, electron: {
+  createChatFeature({ store, storeRoot: store.root, electron: {
     ipcMain: { handle: (name, handler) => handlers.set(name, handler), on() {} },
     dialog: {}, BrowserWindow: class {}, shell: {},
   } }).registerIpcHandlers();

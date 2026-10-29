@@ -15,12 +15,63 @@ function makeRoot() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "codepet-store-"));
 }
 
+test("crashed writer ownership is recovered without taking a live writer", () => {
+  const root = makeRoot();
+  const modulePath = require.resolve('../src/chat/chat-store');
+  const script = `const {ChatStore}=require(${JSON.stringify(modulePath)});new ChatStore({root:${JSON.stringify(root)}}).init();process.kill(process.pid,'SIGKILL')`;
+  require('node:child_process').spawnSync(process.execPath, ['-e',script], {windowsHide:true});
+  const store = new ChatStore({root}).init();
+  assert.throws(()=>new ChatStore({root}).init(), /writer/);
+  store.close();
+});
+
 function makeStore(options = {}) {
   const root = options.root || makeRoot();
   const store = new ChatStore({ root, ...options });
   store.init();
   return store;
 }
+
+test("append repairs final boundaries without losing valid prefix messages", () => {
+  const first = JSON.stringify({ kind: "message", message: { id: "first", text: "Korean" } });
+  for (const tail of [Buffer.from(""), Buffer.from(first + "\n"), Buffer.from(first + "\r\n"),
+    Buffer.from(first), Buffer.from(first + '\n{"cut":'), Buffer.concat([Buffer.from(first + '\n{"cut":"'), Buffer.from([0xe3, 0x81])])]) {
+    const store = makeStore();
+    const session = store.createSession();
+    fs.writeFileSync(store.transcriptPath(session.id), tail);
+    store.appendEvent(session.id, { kind: "message", message: { id: "new", text: "new" } });
+    const messages = store.readMessages(session.id);
+    assert.deepEqual(messages.map(m => m.id), tail.length ? ["first", "new"] : ["new"]);
+    assert.deepEqual(store.readMessagesPage(session.id).messages, messages);
+    store.close();
+  }
+});
+
+test("same root refuses a second writer; separate roots and explicit close work", () => {
+  const first = makeStore();
+  assert.throws(() => new ChatStore({ root: first.root }).init(), /writer/);
+  const other = makeStore(); other.close();
+  first.close();
+  new ChatStore({ root: first.root }).init().close();
+});
+
+test("valid but incomplete index recovers live sessions and never trash", () => {
+  const store = makeStore();
+  const live = store.createSession();
+  const deleted = store.createSession(); store.deleteSession(deleted.id);
+  fs.writeFileSync(store.indexPath(), JSON.stringify({ schemaVersion: 1, sessions: [] }));
+  store.close();
+  const reopened = new ChatStore({ root: store.root }).init();
+  assert.deepEqual(reopened.listSessions().map(s => s.id), [live.id]);
+  reopened.close();
+});
+
+test("index write errors are not reported as success", () => {
+  const store = makeStore();
+  fs.rmSync(store.indexPath()); fs.mkdirSync(store.indexPath());
+  assert.throws(() => store.createSession());
+  store.close();
+});
 
 test("CODE_PET_HOME이 기본 루트를 대체한다", () => {
   const override = makeRoot();
@@ -72,6 +123,7 @@ test("원자적 쓰기: 임시 파일이 남아도 원본 메타는 유효하다
   const meta = store.createSession({ title: "유지" });
   // 크래시 시나리오: 다른 프로세스가 남긴 임시 파일이 있어도 로드에 지장이 없어야 한다.
   fs.writeFileSync(path.join(store.sessionDir(meta.id), ".meta.json.999.1.tmp"), "{broken", "utf8");
+  store.close();
   const reloaded = new ChatStore({ root: store.root }).init();
   assert.equal(reloaded.getSession(meta.id).meta.title, "유지");
 });
@@ -104,6 +156,7 @@ test("Grok 메시지와 실행 메타는 기존 세션 스키마로 왕복한다
     },
   });
 
+  store.close();
   const [message] = new ChatStore({ root: store.root }).init().readMessages(meta.id);
   assert.equal(message.author, "grok");
   assert.equal(message.text, "Grok 응답");
@@ -120,6 +173,7 @@ test("index.json이 깨지면 메타에서 재구축한다", () => {
   const b = store.createSession({ title: "B" });
   fs.writeFileSync(store.indexPath(), "not json at all", "utf8");
 
+  store.close();
   const reloaded = new ChatStore({ root: store.root }).init();
   const ids = reloaded.listSessions().map((entry) => entry.id).sort();
   assert.deepEqual(ids, [a.id, b.id].sort());
@@ -132,6 +186,7 @@ test("더 새로운 스키마의 저장소는 읽기 전용으로 열린다", ()
   const config = JSON.parse(fs.readFileSync(store.configPath(), "utf8"));
   fs.writeFileSync(store.configPath(), JSON.stringify({ ...config, schemaVersion: STORE_SCHEMA_VERSION + 5 }), "utf8");
 
+  store.close();
   const reloaded = new ChatStore({ root }).init();
   assert.equal(reloaded.readOnly, true);
   assert.throws(() => reloaded.createSession({}));
@@ -207,6 +262,7 @@ test("running 상태 세션은 재시작 시 interrupted로 표시된다", () =>
   const meta = store.createSession({});
   store.setSessionStatus(meta.id, "running");
 
+  store.close();
   const reloaded = new ChatStore({ root }).init();
   const session = reloaded.getSession(meta.id);
   assert.equal(session.meta.status, "interrupted");
@@ -223,6 +279,7 @@ test("세션 메타 patch가 워크스페이스/권한/에이전트 설정을 �
     permissionMode: "workspace-read",
     agents: { claude: { enabled: false, model: "fable", effort: "high" } },
   });
+  store.close();
   const reloaded = new ChatStore({ root: store.root }).init();
   const loaded = reloaded.getSession(meta.id).meta;
   assert.equal(loaded.workspace, "D:/work/project");

@@ -15,6 +15,30 @@ const {
 
 const NODE = process.execPath;
 
+test("exit 7 preserves partial output and failure diagnostics", async () => {
+  const result = await runNode("console.log('partial answer');console.error('failure detail');process.exitCode=7").promise;
+  assert.equal(result.ok, false);
+  assert.equal(result.status, "partial");
+  assert.equal(result.exitCode, 7);
+  assert.equal(result.text, "partial answer");
+  assert.match(result.error, /failure detail/);
+  assert.ok(result.diagnostics);
+});
+
+test("duplicate immediate cancellation awaits asynchronous cleanup once", async () => {
+  let cleanups = 0;
+  const run = runNode("setInterval(()=>{},1000)", { onCancel: async () => {
+    await new Promise(resolve => setTimeout(resolve, 40)); cleanups++;
+  } });
+  run.cancel(); run.cancel();
+  const result = await run.promise;
+  assert.equal(result.cancelled, true);
+  assert.equal(result.ok, false);
+  assert.equal(cleanups, 1);
+  run.cancel();
+  assert.equal(cleanups, 1);
+});
+
 function runNode(script, options = {}) {
   return runAgentProcess({
     commandPath: NODE,

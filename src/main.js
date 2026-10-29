@@ -11,6 +11,14 @@ const { prepareX11Relaunch } = require("./linux-window-backend");
 // 한 번 재실행합니다. Ozone 백엔드는 main.js가 실행되기 전에 고르므로
 // app.commandLine.appendSwitch로는 너무 늦습니다.
 const relaunchingForX11 = prepareX11Relaunch(app);
+const instanceReady = relaunchingForX11 ? null : require("./app-instance").claimInstance(
+  app, require("./chat/chat-store").defaultRoot(), (argv) => {
+    if (argv.includes("--chat")) openChatWindow();
+    if (argv.includes("--settings")) openSettingsWindow();
+    if (argv.includes("--live")) liveFeature.openWindow();
+    if (argv.includes("--usage")) usageWindows?.togglePopup();
+  });
+if (!relaunchingForX11 && !instanceReady) return;
 const { CodexAccountSwitcher } = require("./codex-account-switcher");
 const { CodexWatcher } = require("./codex-watcher");
 const { AntigravityWatcher } = require("./antigravity-watcher");
@@ -3654,6 +3662,7 @@ if (!relaunchingForX11) app.whenReady().then(() => {
   }
   if (process.argv.includes("--live")) liveFeature.openWindow();
   if (process.argv.includes("--usage")) usageWindows.togglePopup();
+  instanceReady?.();
   // 사용량 풍선은 수동 호출이라 문제가 없지만, 대화 말풍선은 watcher가 시작되지 않으면 절대 뜨지 않습니다.
   // 그래서 말풍선 renderer 로드 여부와 무관하게 감시를 바로 시작하고, 표시 데이터는 showBubble()에서 큐잉합니다.
   codexWatcher.start();
@@ -3662,6 +3671,10 @@ if (!relaunchingForX11) app.whenReady().then(() => {
   grokWatcher.start();
   codexProxyStartupPromise = restoreCodexProxyMode();
   void codexProxyStartupPromise;
+  if (process.env.CODEPET_PACKAGE_SMOKE_OUTPUT) {
+    require("./package-smoke").runPackageSmoke({app, BrowserWindow, ipcMain}, process.env.CODEPET_PACKAGE_SMOKE_OUTPUT)
+      .catch(error => { console.error(error); app.exit(1); });
+  }
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -3670,11 +3683,17 @@ if (!relaunchingForX11) app.whenReady().then(() => {
   });
 });
 
-app.on("before-quit", () => {
+let shutdownComplete = false;
+let shutdownPending = false;
+app.on("before-quit", (event) => {
+  if (shutdownComplete) return;
+  event.preventDefault();
+  if (shutdownPending) return;
+  shutdownPending = true;
   isQuitting = true;
   usageWindows?.dispose();
   teardownCodexProxyOnQuit();
-  chatFeature.shutdown();
+  Promise.resolve(chatFeature.shutdown()).finally(() => { shutdownComplete = true; app.quit(); });
   liveFeature.shutdown();
 });
 
