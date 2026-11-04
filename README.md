@@ -1,5 +1,10 @@
 # CodePet
 
+> **CodePetMODnMOBILE fork:** Windows improvements and a native Android companion are being planned on `develop`.
+> Start with the [development plan](https://github.com/sangguk-kwon/CodePetMODnMOBILE/blob/develop/docs/README.md)
+> and [contributor/agent instructions](https://github.com/sangguk-kwon/CodePetMODnMOBILE/blob/develop/AGENTS.md).
+> These are planned features; the upstream documentation and downloads below describe the original CodePet.
+
 **English** | [한국어](README.ko.md)
 
 [Download](https://github.com/nokryong/CodePet/releases/latest) · [Release notes](CHANGELOG.md) · [AppImage catalog](https://appimage.github.io/CodePet/)

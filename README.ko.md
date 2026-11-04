@@ -1,5 +1,10 @@
 # CodePet
 
+> **CodePetMODnMOBILE 개조판:** Windows 개선판과 설치형 Android 앱을 `develop`에서 계획하고 있습니다.
+> [개발 계획](https://github.com/sangguk-kwon/CodePetMODnMOBILE/blob/develop/docs/README.md)과
+> [후속 개발 지침](https://github.com/sangguk-kwon/CodePetMODnMOBILE/blob/develop/AGENTS.md)을 먼저 확인하세요.
+> 아직 구현 전이며, 아래 원본 사용 안내와 다운로드 링크는 원본 CodePet을 설명합니다.
+
 [English](README.md) | **한국어**
 
 [다운로드](https://github.com/nokryong/CodePet/releases/latest) · [릴리즈 노트](CHANGELOG.md) · [AppImage 카탈로그](https://appimage.github.io/CodePet/)
