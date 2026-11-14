@@ -51,7 +51,7 @@ function accountFooter(name, account) {
   return parts.length ? `${name} ${parts.join(" · ")}` : null;
 }
 
-// provider 하나는 { name, gauges, footer, account, error, formatResetText, compactLabel } 형태입니다.
+// provider 하나는 { name, gauges, footer, account, note, error, formatResetText, compactLabel } 형태입니다.
 // gauges의 resetText가 이미 표시용 문구면 formatResetText를 켜지 않습니다. (Codex)
 function providerRows(provider, formatReset) {
   return (provider.gauges || []).map((gauge) => ({
@@ -76,9 +76,13 @@ function mergeUsageBubbleData({ providers = [], formatReset = () => "초기화 �
     }
 
     gauges.push(...rows);
-    const footer = provider.footer
-      ? `${provider.name} ${provider.footer}`
-      : accountFooter(provider.name, provider.account);
+    // note는 마지막 성공값을 다시 쓴 경우의 기준 시각처럼 계정과 별개인 부가 설명입니다.
+    const footer = [
+      provider.footer
+        ? `${provider.name} ${provider.footer}`
+        : accountFooter(provider.name, provider.account),
+      provider.note ? `${provider.name} ${provider.note}` : null,
+    ].filter(Boolean).join(" · ");
     if (footer) footerParts.push(footer);
   }
 

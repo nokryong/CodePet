@@ -146,3 +146,22 @@ test("모두 실패하면 게이지 없이 provider별 실패 사유만 보여�
   assert.deepEqual(data.gauges, []);
   assert.equal(data.footer, "Codex 한도 정보 없음 / Claude 한도 정보 없음 / AGY 한도 정보 없음");
 });
+
+test("note는 계정 footer 뒤에 기준 시각으로 붙는다", () => {
+  const merged = mergeUsageBubbleData({
+    providers: [
+      {
+        name: "Claude",
+        gauges: [{ label: "5시간", usedPercent: 40, resetText: "" }],
+        account: { plan: "pro", email: "me@example.com" },
+        note: "7분 전 기준",
+      },
+      {
+        name: "AGY",
+        gauges: [{ label: "주간", usedPercent: 10, resetText: "" }],
+        note: "3분 전 기준",
+      },
+    ],
+  });
+  assert.equal(merged.footer, "Claude pro · me@example.com · Claude 7분 전 기준 / AGY 3분 전 기준");
+});

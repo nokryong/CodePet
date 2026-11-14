@@ -2673,8 +2673,25 @@ function currentClaudeAccountSummary() {
   }
 }
 
+// 소비자 계정 실응답에는 plan_type이 없어서(2026-11-15 확인) 보통 저장된 프로필 플랜
+// (claude auth status의 subscriptionType)을 그대로 씁니다. 응답이 플랜을 줄 때만 그쪽을 우선합니다.
+function claudeAccountSummaryFor(usage) {
+  const profile = currentClaudeAccountSummary();
+  if (!usage?.plan) return profile;
+  return { ...(profile || {}), plan: usage.plan };
+}
+
 function usageErrorText(reason) {
   return reason?.message || (reason ? String(reason) : null);
+}
+
+// 사용량 엔드포인트가 제한되거나 일시 장애일 때 provider-usage가 마지막 성공값을 돌려줍니다.
+// 그 경우에만 기준 시각을 덧붙여서 지금 값인 것처럼 보이지 않게 합니다.
+function usageStaleNote(usage) {
+  const recordedAt = usage?.stale ? Date.parse(usage.asOf || "") : NaN;
+  if (Number.isNaN(recordedAt)) return null;
+  const minutes = Math.max(1, Math.round((Date.now() - recordedAt) / 60000));
+  return `${minutes}분 전 기준`;
 }
 
 // 말풍선용 AGY 한도만 조회합니다. 프로필 저장은 설정 화면 경로가 담당합니다.
@@ -2724,7 +2741,8 @@ async function showUsageBubble() {
       id: "claude",
       name: "Claude",
       gauges: claudeUsage?.gauges,
-      account: currentClaudeAccountSummary(),
+      account: claudeAccountSummaryFor(claudeUsage),
+      note: usageStaleNote(claudeUsage),
       error: usageErrorText(claudeResult.reason),
       formatResetText: true,
     },
@@ -2733,6 +2751,7 @@ async function showUsageBubble() {
       name: "AGY",
       gauges: agyUsage?.gauges,
       account: agyUsage ? { plan: agyUsage.plan, label: agyUsage.email } : null,
+      note: usageStaleNote(agyUsage),
       error: usageErrorText(agyResult.reason),
       formatResetText: true,
       compactLabel: true,
@@ -3690,14 +3709,14 @@ async function loadAntigravityProvider(forceUsage) {
       email: data.email || identity.email,
       plan: data.plan,
     });
-    usage = { id: "agy", label: "AGY", gauges: data.gauges };
-  } catch {
+    usage = { id: "agy", label: "AGY", gauges: data.gauges, note: usageStaleNote(data) };
+  } catch (error) {
     try {
       await antigravityAccountSwitcher.snapshotCurrent();
     } catch {
       // 로그인 정보 자체가 없으면 저장할 프로필도 없습니다.
     }
-    usage = { id: "agy", label: "AGY", error: "조회 불가", gauges: [] };
+    usage = { id: "agy", label: "AGY", error: usageErrorText(error) || "조회 불가", gauges: [] };
   }
   return { accounts: antigravityAccountSwitcher.listProfiles(), usage };
 }
@@ -3729,9 +3748,15 @@ async function loadClaudeProvider(forceUsage) {
       email: status.email,
       plan: status.subscriptionType,
     });
-    usage = { id: "claude", label: "Claude", gauges: data.gauges };
-  } catch {
-    usage = { id: "claude", label: "Claude", error: "조회 불가", gauges: [] };
+    usage = {
+      id: "claude",
+      label: "Claude",
+      gauges: data.gauges,
+      note: usageStaleNote(data),
+    };
+  } catch (error) {
+    // 실패 사유를 그대로 보여줍니다. "조회 불가"만 띄우면 로그아웃인지 장애인지 알 수 없습니다.
+    usage = { id: "claude", label: "Claude", error: usageErrorText(error) || "조회 불가", gauges: [] };
   }
   return { accounts: claudeAccountSwitcher.listProfiles(), usage };
 }

@@ -339,6 +339,8 @@ function renderUsage() {
       card.appendChild(createElement("p", "usage-error", "한도 정보 없음"));
     } else {
       for (const gauge of item.gauges) card.appendChild(createUsageGauge(gauge));
+      // 마지막 성공값을 다시 쓴 경우(엔드포인트 제한 등)의 기준 시각입니다.
+      if (item.note) card.appendChild(createElement("p", "usage-note", item.note));
     }
     root.appendChild(card);
   }

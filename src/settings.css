@@ -1118,6 +1118,12 @@ input[type="search"]::placeholder {
   padding-top: 12px;
 }
 
+.usage-note {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .project-composer {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
