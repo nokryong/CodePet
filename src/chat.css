@@ -1292,6 +1292,10 @@ textarea:focus-visible {
   max-width: 200px;
 }
 
+.chip-button[hidden] {
+  display: none;
+}
+
 .chip-button:hover {
   border-color: var(--accent);
 }

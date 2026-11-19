@@ -240,6 +240,7 @@ class ChatStore {
       workspace: meta.workspace || null,
       permissionMode: meta.permissionMode || "chat",
       status: meta.status || "idle",
+      ...(meta.kind === "pet" ? { kind: "pet" } : {}),
     };
   }
 
@@ -317,6 +318,7 @@ class ChatStore {
       agents: input.agents || {},
       discussion: { ...(input.discussion || {}) },
       status: "idle",
+      ...(input.kind === "pet" ? { kind: "pet" } : {}),
     };
     fs.mkdirSync(this.attachmentsDir(id), { recursive: true });
     writeJsonAtomic(this.metaPath(id), meta);

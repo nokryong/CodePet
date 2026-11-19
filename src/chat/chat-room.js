@@ -163,7 +163,7 @@ class ChatRoom extends EventEmitter {
     return this.agents.find((agent) => agent.id === agentId) || null;
   }
 
-  sendUserMessage(input) {
+  sendUserMessage(input, { route = true } = {}) {
     const payload = typeof input === "string" ? { text: input } : input || {};
     const trimmed = String(payload.text || "").trim();
     const attachments = Array.isArray(payload.attachments) ? payload.attachments : [];
@@ -178,6 +178,7 @@ class ChatRoom extends EventEmitter {
       ...(replyTo ? { replyTo } : {}),
     });
 
+    if (!route) return entry;
     this.mentionsMuted = false;
     const mentionedIds = parseMentions(trimmed, this.agents, GROUP_ALIASES);
     const targets = mentionedIds.length > 0

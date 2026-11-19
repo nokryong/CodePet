@@ -19,6 +19,7 @@ const turnNextLabel = document.getElementById("turn-next-label");
 const turnQueueList = document.getElementById("turn-queue-list");
 const interjectButton = document.getElementById("btn-interject");
 const clearTurnsButton = document.getElementById("btn-clear-turns");
+const clearTurnsLabel = clearTurnsButton.textContent;
 const sessionListEl = document.getElementById("session-list");
 const sessionSearchInput = document.getElementById("session-search-input");
 const newSessionButton = document.getElementById("btn-new-session");
@@ -30,6 +31,7 @@ const workspaceLabel = document.getElementById("workspace-label");
 const permissionSelect = document.getElementById("permission-select");
 const enforcementHint = document.getElementById("enforcement-hint");
 const discussionButton = document.getElementById("btn-discussion");
+const addAccountButton = document.getElementById("btn-add-account");
 const exportSessionButton = document.getElementById("btn-export-session");
 const storeWarning = document.getElementById("store-warning");
 const popover = document.getElementById("popover");
@@ -708,6 +710,8 @@ function renderHeader() {
   sendButton.disabled = providersLoading && !agents.some((agent) => agent.available && agent.enabled);
   const entry = activeSessionEntry();
   sessionTitleEl.textContent = sessionMeta?.title || entry?.title || "세션";
+  const isPet = sessionMeta?.kind === "pet";
+  composerInput.placeholder = isPet ? "펫에게 메시지 보내기" : "참여 중인 에이전트에게 메시지…  (@로 대상 지정 · Enter 전송)";
 
   const workspace = sessionMeta?.workspace || null;
   workspaceLabel.textContent = workspace ? baseName(workspace) : "워크스페이스 없음";
@@ -726,7 +730,7 @@ function renderHeader() {
 
   const hints = [];
   for (const provider of providers) {
-    if (provider.status !== "cli") continue;
+    if (provider.status !== "cli" || (isPet && provider.id !== "codex")) continue;
     const info = provider.permissions?.[mode];
     if (info) {
       hints.push(`${agentById(provider.id)?.name || provider.name}: ${ENFORCEMENT_LABEL[info.enforcement] || info.enforcement}`);
@@ -735,6 +739,8 @@ function renderHeader() {
   enforcementHint.textContent = hints.length > 0 ? `적용 방식 — ${hints.join(" · ")}` : "";
 
   const discussable = agents.filter((agent) => agent.available && agent.enabled).length >= 2;
+  discussionButton.hidden = isPet;
+  addAccountButton.hidden = isPet;
   discussionButton.disabled = !discussable;
   discussionButton.title = discussable
     ? "활성 에이전트들이 합의나 결론에 도달할 때까지 토론합니다"
@@ -762,7 +768,7 @@ function renderAgents() {
     const avatar = makeAgentAvatar(agent, "agent-avatar");
     const label = document.createElement("span");
     label.className = "agent-chip-label";
-    label.textContent = `@${agentMention(agent)}`;
+    label.textContent = sessionMeta?.kind === "pet" ? agent.name : `@${agentMention(agent)}`;
     chip.append(avatar, label);
     chip.addEventListener("click", () => openAgentPopover(chip, agent.id));
     agentChips.append(chip);
@@ -1007,7 +1013,7 @@ async function configureAgent(agentId, patch) {
   return result;
 }
 
-document.getElementById("btn-add-account").addEventListener("click", async (event) => {
+addAccountButton.addEventListener("click", async (event) => {
   const anchor = event.currentTarget;
   const sessionId = activeSessionId;
   anchor.disabled = true;
@@ -1380,6 +1386,10 @@ function scrollToBottom(force = false) {
 
 function renderMessageLabel(nameEl, message, live = false) {
   const agent = agentById(message.author);
+  if (sessionMeta?.kind === "pet") {
+    nameEl.textContent = "CodePet";
+    return;
+  }
   const saved = message.agentMeta || {};
   const parts = [agent?.name || saved.name || message.author,
     `@${agentMention(agent) || saved.mention || message.author}`,
@@ -1775,6 +1785,7 @@ function normalizeTurnState(value) {
     currentAgents: Array.isArray(value?.currentAgents) ? value.currentAgents.filter((id) => typeof id === "string") : [],
     queue: normalizeQueue(value?.queue),
     deferred: normalizeQueue(value?.deferred),
+    petPending: value?.petPending === true,
   };
 }
 
@@ -1833,8 +1844,9 @@ function renderTurnQueue() {
   }
 
   interjectButton.hidden = !turnState.current;
-  clearTurnsButton.hidden = waiting.length === 0;
-  turnQueueBar.hidden = !turnState.current && waiting.length === 0;
+  clearTurnsButton.textContent = sessionMeta?.kind === "pet" ? "맡긴 작업 중지" : clearTurnsLabel;
+  clearTurnsButton.hidden = waiting.length === 0 && !turnState.petPending;
+  turnQueueBar.hidden = !turnState.current && waiting.length === 0 && !turnState.petPending;
 }
 
 // --- 첨부 (작성 중) ---
@@ -1897,6 +1909,7 @@ composerInput.addEventListener("paste", async (event) => {
 
 // --- 멘션 자동완성 ---
 function mentionTargets() {
+  if (sessionMeta?.kind === "pet") return [];
   return [
     ...agents.map((agent) => ({
       alias: agentMention(agent),
@@ -2075,9 +2088,9 @@ interjectButton.addEventListener("click", async () => {
 clearTurnsButton.addEventListener("click", async () => {
   if (!activeSessionId) return;
   const hasCurrent = Boolean(turnState.current);
-  const prompt = hasCurrent
-    ? "현재 응답과 대기 중인 모든 턴을 중지할까요?"
-    : "대기 중인 모든 턴을 비울까요?";
+  const prompt = sessionMeta?.kind === "pet"
+    ? "펫에게 맡긴 작업과 예약된 확인을 중지할까요?"
+    : hasCurrent ? "현재 응답과 대기 중인 모든 턴을 중지할까요?" : "대기 중인 모든 턴을 비울까요?";
   if (!window.confirm(prompt)) return;
   const sessionId = activeSessionId;
   clearTurnsButton.disabled = true;

@@ -74,10 +74,11 @@ function claudeArgv({ permissionMode, workspace, model, effort, attachmentsDir, 
   return argv;
 }
 
-function codexArgv({ permissionMode, workspace, model, effort, outputFile, imagePaths, autoApprove, cliSessionId }) {
+function codexArgv({ permissionMode, workspace, model, effort, outputFile, outputSchemaFile, imagePaths, autoApprove, cliSessionId }) {
   // exec-only options must precede the resume subcommand (notably sandbox/cd/color).
   const argv = ["exec", ...(cliSessionId ? [] : ["-"]), "--skip-git-repo-check", "--color", "never", "--json"];
   if (outputFile) argv.push("-o", outputFile);
+  if (outputSchemaFile) argv.push("--output-schema", outputSchemaFile);
   if (model) argv.push("--model", model);
   if (effort) argv.push("-c", `model_reasoning_effort=${effort}`);
   for (const imagePath of imagePaths) argv.push("--image", imagePath);
@@ -272,6 +273,7 @@ function buildAgentInvocation(input = {}) {
     chatCwd,
     attachmentsDir = null,
     outputFile = null,
+    outputSchemaFile = null,
     autoApprove = false,
     cliSessionId = null,
   } = input;
@@ -339,6 +341,7 @@ function buildAgentInvocation(input = {}) {
       model: normalizedModel,
       effort: normalizedEffort,
       outputFile,
+      outputSchemaFile,
       imagePaths,
       autoApprove,
       cliSessionId,

@@ -64,6 +64,12 @@ Use **＋**, drag and drop, or paste a screenshot. Limits are **20 MiB per file*
 
 Attachments are copied into the session. Images can be delivered to Codex and, with read permission, Claude. AGY and Grok image delivery is not supported; undelivered attachments are marked on the response. Executable files are rejected.
 
+## Chat with your pet
+
+Right-click the pet or tray icon and choose **펫과 대화…**. Sign in to the Codex CLI and give CodePet a goal. It delegates work to separate Codex sessions, reviews their results, and decides what to do next. Reports and questions arrive in the same conversation.
+
+Choose the workspace and permissions in the pet chat. Work continues while CodePet is running, including when the chat window is closed. Scheduled checks resume when the app starts again. Use **맡긴 작업 중지** to stop running work and cancel pending checks.
+
 ## Live voice conversation
 
 Right-click the pet or tray icon and choose **Live 음성 대화…**. Sign in to the installed Codex CLI with a ChatGPT account, then press Start in Live. Use the microphone button to mute, type into the message box during a call, or end the call with the stop button. Closing the window also releases the microphone.

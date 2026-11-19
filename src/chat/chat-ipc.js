@@ -1,7 +1,8 @@
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { ChatStore, readJsonlTolerant } = require("./chat-store");
+const { randomUUID } = require("node:crypto");
+const { ChatStore, readJsonlTolerant, writeJsonAtomic } = require("./chat-store");
 const {
   createCapabilityService,
   toPublicProviders,
@@ -23,6 +24,7 @@ const { ChatTraceStore } = require("./chat-traces");
 const { runWithTraceAccess } = require("./chat-trace-access");
 const { DEFAULT_MAX_MESSAGES, buildAgentPrompt } = require("./chat-prompt");
 const { NativeSessionLink } = require("./chat-native-sessions");
+const { PetCoordinator, PET_TITLE, PET_DECISION_SCHEMA } = require("./pet-coordinator");
 const { readMessageRange } = require("./chat-history");
 const { GrokDockerRuntime } = require("../grok-docker-runtime");
 const {
@@ -48,6 +50,7 @@ function publicMeta(meta) {
     agents: meta.agents || {},
     status: meta.status || "idle",
     readOnly: Boolean(meta.readOnly),
+    ...(meta.kind === "pet" ? { kind: "pet" } : {}),
   };
 }
 
@@ -193,6 +196,7 @@ function createChatFeature(options) {
   }
   const grokDockerRuntime = options.grokDockerRuntime || new GrokDockerRuntime();
   let chatWindow = null;
+  let pet = null;
   let shuttingDown = false;
   const rooms = new Map();
   const activity = new ChatActivity(options.onActivity);
@@ -301,7 +305,7 @@ function createChatFeature(options) {
   }
 
   function notifyChat(sessionId, agentId, kind, text) {
-    if (shuttingDown || !store?.hasSession(sessionId)) return;
+    if (shuttingDown || !store?.hasSession(sessionId) || rooms.get(sessionId)?.meta.kind === "pet") return;
     options.onChatNotification?.({ sessionId, agentId, kind, text,
       agentName: rooms.get(sessionId)?.findAgent(agentId)?.name || agentId });
   }
@@ -331,7 +335,8 @@ function createChatFeature(options) {
   }
 
   function makeRunAgent(sessionId) {
-    return ({ agent, prompt, promptContext, runId, attachments, emitEvent, autoApprove = false }) => {
+    return ({ agent, prompt, promptContext, runId, attachments, emitEvent, autoApprove = false,
+      nativeAgentId = agent.id, planning = false, outputSchemaFile }) => {
       const meta = store?.readMeta(sessionId);
       const record = participantRecord(meta, agent.id);
       const providerId = agent.providerId || agent.id;
@@ -356,17 +361,20 @@ function createChatFeature(options) {
         );
       }
 
+      const permissionMode = planning ? "chat" : (meta.permissionMode || "chat");
+      const workspace = planning ? null : (meta.workspace || null);
       const invocationInput = {
         provider: { ...record, id: providerId },
-        permissionMode: meta.permissionMode || "chat",
-        workspace: meta.workspace || null,
+        permissionMode,
+        workspace,
         model: agent.model,
         effort: agent.effort,
         attachments: enriched,
         chatCwd: store.runtimeChatDir(),
         attachmentsDir,
         outputFile,
-        autoApprove: (meta.permissionMode || "chat") === "workspace-write" && Boolean(config.autoApprove || autoApprove),
+        outputSchemaFile,
+        autoApprove: permissionMode === "workspace-write" && Boolean(config.autoApprove || autoApprove),
       };
       const invocation = buildAgentInvocation(invocationInput);
       if (!invocation.ok) {
@@ -384,7 +392,6 @@ function createChatFeature(options) {
       });
       if (extraLines.length > 0) fullPrompt = `${prompt}\n${extraLines.join("\n")}`;
 
-      const permissionMode = meta.permissionMode || "chat";
       let native = null;
       let cancelled = false;
       const throughId = promptContext?.messages?.at(-1)?.id || null;
@@ -413,7 +420,7 @@ function createChatFeature(options) {
               cwd: invocation.cwd, permissionMode, autoApprove: invocationInput.autoApprove,
               model: agent.model || "default", effort: agent.effort || "default",
             };
-            native = new NativeSessionLink(store, sessionId, agent.id, scope, runtime
+            native = new NativeSessionLink(store, sessionId, nativeAgentId, scope, runtime
               ? { legacyScope: { ...scope, home: sourceHome }, migrate: runtime.migrate } : {});
             if (providerId === "codex" && native.cliSessionId) codexRooms.set(native.cliSessionId, sessionId);
           }
@@ -435,7 +442,7 @@ function createChatFeature(options) {
             permissionMode,
             invocation: continuedInvocation,
             record,
-            workspace: meta.workspace || null,
+            workspace,
             chatCwd: store.runtimeChatDir(),
             runId,
             grokDockerRuntime: docker,
@@ -524,7 +531,9 @@ function createChatFeature(options) {
 
   function buildRoomAgents(meta) {
     const discovered = participantProviders(meta);
-    return roomAgentsFromCapabilities(discovered, meta?.agents || {}, meta?.permissionMode || "chat");
+    const agents = roomAgentsFromCapabilities(discovered, meta?.agents || {}, meta?.permissionMode || "chat");
+    if (meta?.kind !== "pet") return agents;
+    return agents.filter((agent) => agent.id === "codex").map((agent) => ({ ...agent, name: "CodePet" }));
   }
 
   function getRoom(sessionId) {
@@ -553,13 +562,15 @@ function createChatFeature(options) {
         const latestMeta = store?.readMeta(sessionId);
         const providerId = payload?.agent?.providerId || payload?.agent?.id;
         const participant = latestMeta?.agents?.[payload?.agent?.id];
-        if (providerId === "codex" && !(latestMeta.permissionMode === "workspace-write" && (participant?.autoApprove || payload.autoApprove))) {
+        if (providerId === "codex" && (payload.planning ||
+          !(latestMeta.permissionMode === "workspace-write" && (participant?.autoApprove || payload.autoApprove)))) {
           const account = participant?.profileKey ? accountService("codex")?.prepare(participant.profileKey) : null;
           const env = account?.env || options.env || process.env;
           const sourceHome = env.CODEX_HOME || path.join(os.homedir(), ".codex");
           await codexRuntime.prepareSandbox({ sourceHome, identity: activeAccountKey(providerId, participant || {}),
             sandboxSource: options.getCodexAccountSwitcher?.()?.codexHome || sourceHome,
-            record: participantRecord(latestMeta, payload.agent.id), cwd: latestMeta.workspace || store.runtimeChatDir() });
+            record: participantRecord(latestMeta, payload.agent.id),
+            cwd: (!payload.planning && latestMeta.workspace) || store.runtimeChatDir() });
         }
         if ((payload?.agent?.providerId || payload?.agent?.id) === "grok" && ["workspace-read", "workspace-write"].includes(latestMeta?.permissionMode)) {
           const config = latestMeta.agents?.[payload.agent.id];
@@ -568,7 +579,7 @@ function createChatFeature(options) {
         }
         if (typeof options.prepareAgent === "function") await options.prepareAgent(payload);
       },
-      meta: { permissionMode: meta.permissionMode || "chat", workMode: Boolean(options.getAppearance?.().workMode) },
+      meta: { kind: meta.kind, permissionMode: meta.permissionMode || "chat", workMode: Boolean(options.getAppearance?.().workMode) },
     });
 
     room.on("message", (message) => {
@@ -628,7 +639,7 @@ function createChatFeature(options) {
       messages: page.messages,
       history: { before: page.before, hasMore: page.hasMore },
       typing: room.state().typing,
-      turnState: room.turnState(),
+      turnState: { ...room.turnState(), ...(pet?.id === sessionId ? { petPending: pet.coordinator.hasWork() } : {}) },
       pendingAttachments: [...pendingFor(sessionId).values()].map(publicAttachment),
     };
   }
@@ -641,6 +652,70 @@ function createChatFeature(options) {
         attachments: (message.attachments || []).map(publicAttachment),
       })),
     };
+  }
+
+  function startPetRun(room, input, schemaFile) {
+    let cancelled = false;
+    let run = null;
+    const promise = (async () => {
+      if (providerRefresh) await providerRefresh;
+      else if (ensureCapabilityService().getRecord("codex")?.status !== "cli") await ensureCapabilityService().discover();
+      if (cancelled || shuttingDown) return { cancelled: true };
+      const meta = store.readMeta(room.sessionId);
+      const agent = meta && buildRoomAgents(meta).find((entry) => entry.id === "codex" && entry.available);
+      if (!agent) return { ok: false, error: "Codex CLI를 찾지 못했어요. 설치와 로그인을 확인해 주세요." };
+      if (agent.enabled === false) return { ok: false, error: "이 대화에서 Codex가 꺼져 있어요." };
+
+      const runId = "rpet-" + randomUUID();
+      await room.prepareAgent({ agent, runId, planning: input.planning });
+      if (cancelled || shuttingDown) return { cancelled: true };
+      run = room.runAgent({
+        ...input, agent, runId, emitEvent: () => {},
+        nativeAgentId: input.planning ? "pet-coordinator" : "pet-task-" + input.taskId,
+        outputSchemaFile: input.planning ? schemaFile : undefined,
+      });
+      return run.promise;
+    })();
+    return { promise, cancel: () => { cancelled = true; run?.cancel(); } };
+  }
+
+  function petSession() {
+    return ensureStore()?.listSessions().find((session) => session.kind === "pet");
+  }
+
+  function petCoordinator(sessionId) {
+    const meta = store.readMeta(sessionId);
+    if (meta?.kind !== "pet" || store.readOnly || meta.readOnly) return null;
+    if (pet?.id === sessionId && !pet.coordinator.closed) return pet.coordinator;
+
+    const room = getRoom(sessionId);
+    const dir = store.sessionDir(sessionId);
+    const schemaFile = path.join(dir, "pet-decision-schema.json");
+    writeJsonAtomic(schemaFile, PET_DECISION_SCHEMA);
+    const onError = (error) => console.warn("[code-pet] 자동 작업 상태를 처리하지 못했습니다:", error.message);
+    const coordinator = new PetCoordinator({
+      stateFile: path.join(dir, "pet-state.json"),
+      readMessages: () => store.readMessages(sessionId),
+      getScope: () => {
+        const { workspace, permissionMode } = store.readMeta(sessionId);
+        return { workspace, permissionMode };
+      },
+      runAgent: (input) => startPetRun(room, input, schemaFile),
+      publish: (message) => room.appendMessage(message),
+      onActivity: (petPending) => broadcast("chat:turn-state", { sessionId, ...room.turnState(), petPending }),
+      onError,
+    });
+    pet = { id: sessionId, coordinator };
+    return coordinator;
+  }
+
+  function resumePetWork() {
+    try {
+      const session = petSession();
+      if (session) petCoordinator(session.id)?.wake();
+    } catch (error) {
+      console.warn("[code-pet] 펫 대화를 복구하지 못했습니다:", error.message);
+    }
   }
 
   async function fullState({ refreshProviders = false, backgroundProviders = false } = {}) {
@@ -765,6 +840,10 @@ function createChatFeature(options) {
       wrap(async ({ sessionId }) => {
         requireSession(sessionId);
         if (store.readOnly || store.readMeta(sessionId)?.readOnly) throw new Error("읽기 전용 저장소입니다.");
+        if (pet?.id === sessionId) {
+          pet.coordinator.close();
+          pet = null;
+        }
         const room = rooms.get(sessionId);
         if (room) {
           room.stopAllSilently();
@@ -814,6 +893,9 @@ function createChatFeature(options) {
       wrap(async ({ sessionId, text, attachmentIds, replyTo }) => {
         requireSession(sessionId);
         const room = getRoom(sessionId);
+        const isPet = room.meta.kind === "pet";
+        const coordinator = isPet ? petCoordinator(sessionId) : null;
+        if (isPet && !coordinator) throw new Error("읽기 전용 저장소입니다.");
         const pending = pendingFor(sessionId);
         const attachments = [];
         for (const id of Array.isArray(attachmentIds) ? attachmentIds : []) {
@@ -823,8 +905,9 @@ function createChatFeature(options) {
             pending.delete(id);
           }
         }
-        const entry = room.sendUserMessage({ text, attachments, replyTo });
+        const entry = room.sendUserMessage({ text, attachments, replyTo }, { route: !isPet });
         if (!entry) throw new Error("보낼 내용이 없습니다.");
+        coordinator?.wake();
         return {};
       })
     );
@@ -833,7 +916,14 @@ function createChatFeature(options) {
       "chat:stop",
       wrap(async ({ sessionId }) => {
         requireSession(sessionId);
-        getRoom(sessionId)?.stopAll();
+        const room = getRoom(sessionId);
+        if (room?.meta.kind === "pet") {
+          const coordinator = petCoordinator(sessionId);
+          if (!coordinator) throw new Error("읽기 전용 저장소입니다.");
+          coordinator.stop();
+        } else {
+          room?.stopAll();
+        }
         return {};
       })
     );
@@ -862,6 +952,7 @@ function createChatFeature(options) {
       wrap(async ({ sessionId, agentIds }) => {
         requireSession(sessionId);
         const room = getRoom(sessionId);
+        if (room.meta.kind === "pet") throw new Error("펫과 대화는 CodePet이 진행합니다.");
         const cleanIds = Array.isArray(agentIds)
           ? agentIds.filter((id) => typeof id === "string")
           : undefined;
@@ -905,6 +996,7 @@ function createChatFeature(options) {
         } catch {
           throw new Error("선택한 폴더를 확인할 수 없습니다.");
         }
+        if (pet?.id === sessionId && store.readMeta(sessionId)?.workspace !== workspace) pet.coordinator.stop();
         grokDockerRuntime.discardSessionChanges(sessionId);
         store.updateMeta(sessionId, { workspace });
         refreshRoomAgents(sessionId);
@@ -916,6 +1008,7 @@ function createChatFeature(options) {
       "chat:workspace:clear",
       wrap(async ({ sessionId }) => {
         requireSession(sessionId);
+        if (pet?.id === sessionId && store.readMeta(sessionId)?.workspace) pet.coordinator.stop();
         grokDockerRuntime.discardSessionChanges(sessionId);
         // 워크스페이스가 없으면 workspace 권한 모드도 의미가 없어 chat으로 되돌립니다.
         store.updateMeta(sessionId, { workspace: null, permissionMode: "chat" });
@@ -933,6 +1026,7 @@ function createChatFeature(options) {
         if (mode !== "chat" && !meta.workspace) {
           throw new Error("먼저 워크스페이스 폴더를 선택해 주세요.");
         }
+        if (pet?.id === sessionId && meta.permissionMode !== mode) pet.coordinator.stop();
         store.updateMeta(sessionId, { permissionMode: mode });
         refreshRoomAgents(sessionId);
         return { meta: publicMeta(store.readMeta(sessionId)) };
@@ -966,6 +1060,8 @@ function createChatFeature(options) {
           }
           next.autoApprove = patch.autoApprove;
         }
+        if (pet?.id === sessionId && agentId === "codex" &&
+          (next.enabled === false || Boolean(next.autoApprove) !== Boolean(current.autoApprove))) pet.coordinator.stop();
         store.updateMeta(sessionId, { agents: { ...meta.agents, [agentId]: next } });
         refreshRoomAgents(sessionId);
         return { meta: publicMeta(store.readMeta(sessionId)) };
@@ -1214,9 +1310,23 @@ function createChatFeature(options) {
     return chatWindow && !chatWindow.isDestroyed() ? chatWindow : null;
   }
 
+  function openPetWindow() {
+    try {
+      let session = petSession();
+      if (!store) throw new Error(storeError || "저장소를 사용할 수 없습니다.");
+      if (!session) session = store.createSession({ title: PET_TITLE, kind: "pet" });
+      petCoordinator(session.id)?.wake();
+      return openWindow(session.id);
+    } catch (error) {
+      dialog.showErrorBox(PET_TITLE, error.message);
+      return null;
+    }
+  }
+
   // 앱 종료: 진행 중이던 세션은 interrupted로 남겨 다음 시작 때 안내합니다.
   function shutdown() {
     shuttingDown = true;
+    pet?.coordinator.close();
     activity.clear();
     grokDockerRuntime.clearWorkspaceChanges();
     for (const [sessionId, room] of rooms) {
@@ -1235,7 +1345,7 @@ function createChatFeature(options) {
     return Promise.allSettled([...pendingProcesses]).then(release);
   }
 
-  return { registerIpcHandlers, openWindow, getWindow, findCodexSession, shutdown };
+  return { registerIpcHandlers, openWindow, openPetWindow, resumePetWork, getWindow, findCodexSession, shutdown };
 }
 
 module.exports = {
