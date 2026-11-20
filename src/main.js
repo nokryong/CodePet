@@ -3277,6 +3277,7 @@ function createWindow() {
     },
   });
   const createdPetWindow = petWindow;
+  releaseHiddenWindow(createdPetWindow, { canRelease: () => petHiddenToTray && !isQuitting });
 
   petWindow.setMenuBarVisibility(false);
   // OS 테두리/스냅을 통한 수동 리사이즈만 막습니다. renderer의 커스텀 핸들이 호출하는
@@ -3677,7 +3678,7 @@ if (!relaunchingForX11) app.whenReady().then(() => {
   }
 
   app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
+    if (!petHiddenToTray && BrowserWindow.getAllWindows().length === 0) {
       createWindow();
     }
   });
@@ -3691,28 +3692,20 @@ app.on("before-quit", (event) => {
   if (shutdownPending) return;
   shutdownPending = true;
   isQuitting = true;
+  stopMovementLoop();
+  hideBubble();
+  codexWatcher.stop();
+  antigravityWatcher.stop();
+  claudeWatcher.stop();
+  grokWatcher.stop();
   usageWindows?.dispose();
   teardownCodexProxyOnQuit();
   Promise.resolve(chatFeature.shutdown()).finally(() => { shutdownComplete = true; app.quit(); });
   liveFeature.shutdown();
 });
 
-app.on("window-all-closed", () => {
-  stopMovementLoop();
-  clearTimeout(phaseTimer);
-  clearTimeout(reactionTimer);
-  clearTimeout(bubbleHideTimer);
-  clearTimeout(bubbleRenderFallbackTimer);
-  codexWatcher.stop();
-  antigravityWatcher.stop();
-  claudeWatcher.stop();
-  grokWatcher.stop();
-
-  // 트레이에 남아 있어야 하는 일반 닫힘과, "완전 종료"를 명확히 분리합니다.
-  if (isQuitting) {
-    app.quit();
-  }
-});
+// 렌더러를 모두 해제한 뒤에도 앱과 로그 감시는 트레이에서 계속 실행합니다.
+app.on("window-all-closed", () => {});
 
 function getAppearancePayload() {
   const settings = readSettings();
