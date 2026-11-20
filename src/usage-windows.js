@@ -4,13 +4,13 @@ const { avoidWindows } = require("./usage-monitor");
 const { createTaskbar } = require("./windows-taskbar");
 const { releaseHiddenWindow } = require("./idle-window-release");
 
-function createUsageWindows({ electron, monitor, readSettings, writeSettings, openSettings, onVisibilityChange, getObstacles = () => [], taskbarFactory = createTaskbar }) {
+function createUsageWindows({ electron, monitor, readSettings, writeSettings, openSettings, onVisibilityChange, getObstacles = () => [], taskbarFactory = createTaskbar, taskbarEnabled = true }) {
   const { BrowserWindow, ipcMain, screen, powerMonitor } = electron;
   let popup = null;
   const alive = (win) => win && !win.isDestroyed();
   const trusted = (event) => alive(popup) && event.sender === popup.webContents;
   const publish = (value) => {
-    taskbar.update(value);
+    taskbar?.update(value);
     if (alive(popup)) popup.webContents.send("usage-monitor:update", value);
   };
 
@@ -29,6 +29,7 @@ function createUsageWindows({ electron, monitor, readSettings, writeSettings, op
   }
 
   function toggleBar() {
+    if (!taskbar) return;
     const visible = readSettings().taskbarUsageVisible === false;
     writeSettings({ taskbarUsageVisible: visible });
     taskbar.setVisible(visible);
@@ -56,16 +57,18 @@ function createUsageWindows({ electron, monitor, readSettings, writeSettings, op
   const reposition = () => {
     if (alive(popup)) popup.hide();
   };
-  let icon;
-  try { icon = fs.readFileSync(path.join(__dirname, "..", "build", "icon.png")); } catch { }
-  const taskbar = taskbarFactory({ icon, visible: readSettings().taskbarUsageVisible !== false, onClick: (physicalBounds) => {
-    const bounds = process.platform === "win32" ? screen.screenToDipRect(null, physicalBounds) : physicalBounds;
-    togglePopup(bounds);
-  } });
-  // The discarded floating overlay used usageBarVisible. Its hidden state must
-  // never disable the new, independently controlled native taskbar widget.
-  taskbar.setVisible(readSettings().taskbarUsageVisible !== false);
-  taskbar.update(monitor.snapshot());
+  let taskbar;
+  if (taskbarEnabled) {
+    let icon;
+    try { icon = fs.readFileSync(path.join(__dirname, "..", "build", "icon.png")); } catch { }
+    const visible = readSettings().taskbarUsageVisible !== false;
+    taskbar = taskbarFactory({ icon, visible, onClick: (physicalBounds) => {
+      const bounds = process.platform === "win32" ? screen.screenToDipRect(null, physicalBounds) : physicalBounds;
+      togglePopup(bounds);
+    } });
+    taskbar.setVisible(visible);
+    taskbar.update(monitor.snapshot());
+  }
   const resume = () => void monitor.invalidate();
   monitor.on("update", publish);
   ipcMain.handle("usage-monitor:get", (event) => trusted(event) ? monitor.snapshot() : null);
@@ -88,9 +91,9 @@ function createUsageWindows({ electron, monitor, readSettings, writeSettings, op
 
   return { toggleBar, togglePopup,
     bringToFront() { if (alive(popup) && popup.isVisible()) popup.moveTop(); },
-    resetPosition() { taskbar.resetPosition(); },
+    resetPosition() { taskbar?.resetPosition(); },
     dispose() {
-      monitor.stop(); monitor.off("update", publish); taskbar.dispose();
+      monitor.stop(); monitor.off("update", publish); taskbar?.dispose();
       screen.off("display-metrics-changed", reposition); screen.off("display-removed", reposition); powerMonitor.off("resume", resume);
       ipcMain.removeHandler("usage-monitor:get"); ipcMain.removeHandler("usage-monitor:refresh");
       if (alive(popup)) popup.destroy();

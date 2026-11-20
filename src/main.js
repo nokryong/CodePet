@@ -4,6 +4,9 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { prepareX11Relaunch } = require("./linux-window-backend");
+const { listPetAssets } = require("./pet-assets");
+const nativePetUi = process.platform === "win32" && process.argv.includes("--native-pet-ui");
+if (nativePetUi) process.stdout.on("error", () => {}); // The native launcher can exit while chat continues.
 
 // Wayland는 일반 앱의 절대 위치 이동을 허용하지 않아 데스크톱 펫의
 // 자동 보행과 always-on-top 계약을 지킬 수 없습니다. XWayland가 있는
@@ -347,62 +350,7 @@ function buildActivityBubbleModeSubmenu() {
 //  2. ~/.codex/pets/* — Codex가 설치한 펫들 (pet.json의 displayName을 메뉴 이름으로 사용)
 //  3. 내장 기본 스프라이트
 function listAvailablePets() {
-  const pets = [];
-
-  const customDir = path.join(getBaseDir(), "pet");
-  const customPath = path.join(customDir, "spritesheet.webp");
-  if (fs.existsSync(customPath)) {
-    let spriteVersionNumber = null;
-    try {
-      const meta = JSON.parse(fs.readFileSync(path.join(customDir, "pet.json"), "utf8"));
-      spriteVersionNumber = Number(meta.spriteVersionNumber) || null;
-    } catch {
-      // pet.json이 없어도 이미지 크기로 규격을 판별합니다.
-    }
-    pets.push({
-      key: "custom",
-      label: "커스텀 (pet 폴더)",
-      spritePath: customPath,
-      spriteVersionNumber,
-    });
-  }
-
-  let codexPetNames = [];
-  try {
-    codexPetNames = fs.readdirSync(CODEX_PETS_DIR);
-  } catch {
-    // Codex가 설치되지 않은 PC면 그냥 건너뜁니다.
-  }
-
-  for (const name of codexPetNames) {
-    const spritePath = path.join(CODEX_PETS_DIR, name, "spritesheet.webp");
-    if (!fs.existsSync(spritePath)) continue;
-
-    let label = name;
-    let spriteVersionNumber = null;
-    try {
-      const meta = JSON.parse(
-        fs.readFileSync(path.join(CODEX_PETS_DIR, name, "pet.json"), "utf8")
-      );
-      if (meta.displayName) label = meta.displayName;
-      spriteVersionNumber = Number(meta.spriteVersionNumber) || null;
-    } catch {
-      // pet.json이 없거나 형식이 달라도 폴더명으로 표시하면 됩니다.
-    }
-
-    pets.push({ key: `codex:${name}`, label, spritePath, spriteVersionNumber });
-  }
-
-  if (fs.existsSync(SPRITE_ASSET.filePath)) {
-    pets.push({
-      key: "builtin",
-      label: "기본 펫 (내장)",
-      spritePath: SPRITE_ASSET.filePath,
-      spriteVersionNumber: SPRITE_ASSET.spriteVersionNumber,
-    });
-  }
-
-  return pets;
+  return listPetAssets({ baseDir: getBaseDir(), codexPetsDir: CODEX_PETS_DIR, builtin: SPRITE_ASSET });
 }
 
 // 저장된 선택이 유효하면 그 펫을, 아니면(첫 실행, 펫 삭제됨 등) 목록의 첫 번째를 사용합니다.
@@ -514,6 +462,11 @@ const chatFeature = createChatFeature({
   prepareAgent: ({ agent }) => prepareChatAgent(agent),
   onActivity: (state) => {
     chatActivityState = state || null;
+    if (nativePetUi) {
+      process.stdout.write(`codepet-native-state:${state || "idle"}\n`);
+      if (!state) scheduleNativePetUiQuit();
+      return;
+    }
     if (state) pauseAutoMovement("chat", state);
     else resumeAutoMovement("chat");
   },
@@ -627,7 +580,7 @@ const codexProxy = new CodexProxy({
 // PR에서 약속한 동작대로 신규/기존 설정 모두 기본값은 켜짐입니다.
 // 사용자가 메뉴에서 명시적으로 끈 경우에만 false가 저장됩니다.
 function isCodexProxyModeEnabled() {
-  return readSettings().codexProxyMode !== false;
+  return !nativePetUi && readSettings().codexProxyMode !== false;
 }
 
 // 프록시가 실제로 config.toml에 주입되어 Codex 트래픽이 프록시를 타는 상태인지입니다.
@@ -641,6 +594,7 @@ let codexProxyRecoveryPromise = null;
 // 앱 강제 종료나 오래된 인스턴스가 남긴 죽은 localhost 주소 때문에 새 CLI가
 // 재시도만 반복하는 상황을 시작 시점뿐 아니라 매 실행마다 복구합니다.
 async function ensureCodexProxyReadyForRun() {
+  if (nativePetUi) return;
   if (codexProxyRecoveryPromise) return codexProxyRecoveryPromise;
   codexProxyRecoveryPromise = (async () => {
     if (codexProxyStartupPromise) await codexProxyStartupPromise;
@@ -2182,6 +2136,7 @@ function hidePetWindowToTray() {
 
 // 트레이에서 다시 보이기를 누르면 기존 창을 다시 보여주고, 창이 파괴된 상태라면 새로 만듭니다.
 function showPetWindowFromTray() {
+  if (nativePetUi) return;
   if (readSettings().workMode) {
     chatFeature.openWindow();
     return;
@@ -3277,6 +3232,7 @@ function createWindow() {
     },
   });
   const createdPetWindow = petWindow;
+  releaseHiddenWindow(createdPetWindow, { canRelease: () => petHiddenToTray && !isQuitting });
 
   petWindow.setMenuBarVisibility(false);
   // OS 테두리/스냅을 통한 수동 리사이즈만 막습니다. renderer의 커스텀 핸들이 호출하는
@@ -3629,11 +3585,13 @@ if (!relaunchingForX11) app.whenReady().then(() => {
   }
   restoreMovementPreferences();
   registerIpcHandlers();
-  registerCodexWatcher();
-  registerExternalWatcher(antigravityWatcher, "AGY");
-  registerExternalWatcher(claudeWatcher, "Claude");
-  registerExternalWatcher(grokWatcher, "Grok");
-  createTray();
+  if (!nativePetUi) {
+    registerCodexWatcher();
+    registerExternalWatcher(antigravityWatcher, "AGY");
+    registerExternalWatcher(claudeWatcher, "Claude");
+    registerExternalWatcher(grokWatcher, "Grok");
+    createTray();
+  }
   usageMonitor = new UsageMonitor([
     { id: "codex", label: "Codex", load: async () => {
       const before = codexAccountSwitcher.getCurrentAccountSummary();
@@ -3649,9 +3607,10 @@ if (!relaunchingForX11) app.whenReady().then(() => {
     { id: "claude", label: "Claude", load: loadClaudeProvider },
     { id: "grok", label: "Grok", load: loadGrokProvider },
   ]);
-  createWindow();
+  if (!nativePetUi) createWindow();
   usageWindows = createUsageWindows({ electron: { BrowserWindow, ipcMain, screen, powerMonitor },
     monitor: usageMonitor, readSettings, writeSettings, openSettings: openSettingsWindow,
+    taskbarEnabled: !nativePetUi,
     onVisibilityChange: refreshTrayMenu,
     getObstacles: () => [petWindow, bubbleWindow].filter((win) => win && !win.isDestroyed()).map((win) => win.getBounds()) });
   if (process.argv.includes("--settings")) {
@@ -3665,19 +3624,21 @@ if (!relaunchingForX11) app.whenReady().then(() => {
   instanceReady?.();
   // 사용량 풍선은 수동 호출이라 문제가 없지만, 대화 말풍선은 watcher가 시작되지 않으면 절대 뜨지 않습니다.
   // 그래서 말풍선 renderer 로드 여부와 무관하게 감시를 바로 시작하고, 표시 데이터는 showBubble()에서 큐잉합니다.
-  codexWatcher.start();
-  antigravityWatcher.start();
-  claudeWatcher.start();
-  grokWatcher.start();
-  codexProxyStartupPromise = restoreCodexProxyMode();
-  void codexProxyStartupPromise;
+  if (!nativePetUi) {
+    codexWatcher.start();
+    antigravityWatcher.start();
+    claudeWatcher.start();
+    grokWatcher.start();
+    codexProxyStartupPromise = restoreCodexProxyMode();
+    void codexProxyStartupPromise;
+  }
   if (process.env.CODEPET_PACKAGE_SMOKE_OUTPUT) {
     require("./package-smoke").runPackageSmoke({app, BrowserWindow, ipcMain}, process.env.CODEPET_PACKAGE_SMOKE_OUTPUT)
       .catch(error => { console.error(error); app.exit(1); });
   }
 
   app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
+    if (!nativePetUi && !petHiddenToTray && BrowserWindow.getAllWindows().length === 0) {
       createWindow();
     }
   });
@@ -3691,27 +3652,27 @@ app.on("before-quit", (event) => {
   if (shutdownPending) return;
   shutdownPending = true;
   isQuitting = true;
-  usageWindows?.dispose();
-  teardownCodexProxyOnQuit();
-  Promise.resolve(chatFeature.shutdown()).finally(() => { shutdownComplete = true; app.quit(); });
-  liveFeature.shutdown();
-});
-
-app.on("window-all-closed", () => {
   stopMovementLoop();
-  clearTimeout(phaseTimer);
-  clearTimeout(reactionTimer);
-  clearTimeout(bubbleHideTimer);
-  clearTimeout(bubbleRenderFallbackTimer);
+  hideBubble();
   codexWatcher.stop();
   antigravityWatcher.stop();
   claudeWatcher.stop();
   grokWatcher.stop();
+  usageWindows?.dispose();
+  if (!nativePetUi) teardownCodexProxyOnQuit();
+  Promise.resolve(chatFeature.shutdown()).finally(() => { shutdownComplete = true; app.quit(); });
+  liveFeature.shutdown();
+});
 
-  // 트레이에 남아 있어야 하는 일반 닫힘과, "완전 종료"를 명확히 분리합니다.
-  if (isQuitting) {
-    app.quit();
-  }
+function scheduleNativePetUiQuit() {
+  setImmediate(() => {
+    if (!isQuitting && !chatActivityState && BrowserWindow.getAllWindows().length === 0) app.quit();
+  });
+}
+
+// 일반 모드는 트레이를 유지하고, 네이티브 모드는 채팅 작업이 끝나면 UI를 종료합니다.
+app.on("window-all-closed", () => {
+  if (nativePetUi) scheduleNativePetUiQuit();
 });
 
 function getAppearancePayload() {

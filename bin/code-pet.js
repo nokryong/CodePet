@@ -35,7 +35,7 @@ async function doctor() {
   process.exitCode = failed ? 1 : 0;
 }
 
-function launchApp(extraArgs) {
+async function launchApp(extraArgs) {
   let electronPath = null;
   try {
     // electron 패키지가 함께 설치된 경우에만 실행할 수 있습니다.
@@ -50,6 +50,11 @@ function launchApp(extraArgs) {
       ].join("\n")
     );
     process.exitCode = 1;
+    return;
+  }
+  if (extraArgs[0] === "--native-pet") {
+    const { launchNativePet } = require("../src/windows-native-pet");
+    await launchNativePet({ electronPath, appRoot: APP_ROOT });
     return;
   }
   const child = spawn(electronPath, [APP_ROOT, ...extraArgs], {
@@ -67,5 +72,8 @@ if (args[0] === "doctor") {
     process.exitCode = 1;
   });
 } else {
-  launchApp(args);
+  launchApp(args).catch((error) => {
+    console.error(`CodePet 실행 실패: ${error.message}`);
+    process.exitCode = 1;
+  });
 }
