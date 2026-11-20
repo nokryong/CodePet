@@ -1,9 +1,9 @@
+const { spawn } = require("node:child_process");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { createClaudeFileStore } = require("./claude-live-credentials");
-const { withAntigravityCredential } = require("./antigravity-auth");
 
 const CLAUDE_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const cache = new Map();
@@ -43,52 +43,34 @@ function clearUsageCache(provider = null) {
   }
 }
 
-function normalizeAgyQuota(data) {
-  return (data?.groups || []).flatMap((group) =>
-    (group.buckets || []).flatMap((bucket) => {
-      const raw = bucket.remainingFraction ?? bucket.remaining_fraction;
-      if (raw == null || raw === "") return [];
-      const remaining = Number(raw);
-      if (!Number.isFinite(remaining)) return [];
-      return [{
-        label: [group.displayName || group.name, String(bucket.displayName || bucket.window || "").replace(/\s+Remaining$/i, "")]
-          .filter(Boolean)
-          .join(" · "),
-        usedPercent: clampPercent((1 - remaining) * 100),
-        resetText: bucket.resetTime || bucket.reset_time || "",
-      }];
-    })
-  );
-}
+const AGY_USAGE_LINE = /^\s*(\S.*?)(?:\t+|\s{2,})(\S.*?)(?:\t+|\s{2,})(\d{1,3}(?:\.\d+)?)%(?:(?:\t+|\s{2,})(\S+))?\s*$/;
+const AGY_SIGNED_OUT = /authentication required|unauthenticated|not (?:logged|signed)[- ]?in|\bplease (?:sign|log)[- ]?in\b|\b(?:sign|log)[- ]?in (?:first|required)\b/i;
+const ANSI_ESCAPE = /\x1b\[[0-?]*[ -/]*[@-~]/g;
+const AGY_CLI_TIMEOUT_MS = 25000;
+const AGY_MAX_OUTPUT_BYTES = 1024 * 1024;
+const AGY_CACHE_TTL_MS = 5 * 60 * 1000;
 
-function normalizeAgyGeminiQuota(data) {
-  const models = Object.entries(data?.models || {}).filter(([id, model]) =>
-    model && !model.isInternal && (/^gemini(?:-|$)/i.test(id) || /^gemini\b/i.test(model.displayName || ""))
-  );
-  const tieredIds = new Set(Object.values(data?.tieredModelIds || {})
-    .flatMap((ids) => Array.isArray(ids) ? ids.filter((id) => typeof id === "string") : []));
-  const tiered = models.filter(([id]) => tieredIds.has(id));
-  // Prefer the current tier's model IDs over legacy aliases. Older responses
-  // without this catalog can still expose named, public Gemini models.
-  const candidates = tiered.length ? tiered : models.filter(([, model]) => model.displayName);
-  const gauges = candidates.flatMap(([id, model]) => {
-    const quota = model.quotaInfo || model.quota_info;
-    const raw = quota?.remainingFraction ?? quota?.remaining_fraction;
-    if (!["number", "string"].includes(typeof raw) || String(raw).trim() === "") return [];
-    const remaining = Number(raw);
-    if (!Number.isFinite(remaining)) return [];
-    return [{ label: model.displayName || id,
-      usedPercent: clampPercent((1 - remaining) * 100),
-      resetText: quota.resetTime || quota.reset_time || "" }];
-  });
-  if (!gauges.length) return [];
-  const first = gauges[0];
-  // Shared Gemini quotas need one row. Preserve distinct balances/reset times
-  // when the backend returns different model limits.
-  if (gauges.every((gauge) => gauge.usedPercent === first.usedPercent && gauge.resetText === first.resetText)) {
-    return [{ ...first, label: "Gemini" }];
+function parseAgyUsage(text) {
+  const gauges = [];
+  const plain = String(text || "").replace(ANSI_ESCAPE, "");
+  for (const line of plain.split(/\r?\n/)) {
+    const match = AGY_USAGE_LINE.exec(line);
+    if (!match || gauges.length >= 16) continue;
+    const groupName = match[1].trim();
+    let windowName = match[2].trim().replace(/\s+Remaining$/i, "");
+    if (groupName && windowName.startsWith(`${groupName} `)) {
+      windowName = windowName.slice(groupName.length + 1);
+    }
+    const label = [groupName, windowName].filter(Boolean).join(" · ");
+    const remaining = Number(match[3]);
+    if (!Number.isFinite(remaining)) continue;
+    gauges.push({
+      label: label || "사용 한도",
+      usedPercent: clampPercent(100 - remaining),
+      resetText: (match[4] || "").trim(),
+    });
   }
-  return [...new Map(gauges.map((gauge) => [JSON.stringify(gauge), gauge])).values()];
+  return gauges;
 }
 
 function normalizeClaudeUsage(data) {
@@ -242,89 +224,83 @@ async function fetchClaudeUsage({ home = os.homedir(), force = false, credential
   }, { force });
 }
 
-function tierLabel(assist) {
-  const tier = assist?.paidTier || assist?.paid_tier || assist?.currentTier || assist?.current_tier || null;
-  if (typeof tier === "string") return tier;
-  return tier?.displayName || tier?.display_name || tier?.name || tier?.id || null;
-}
-
-// agy CLI처럼 Go 형식의 OS/아키텍처 이름을 보냅니다.
-const AGY_USER_AGENT = `antigravity/cli/1.0.11 ${process.platform === "win32" ? "windows" : process.platform}/${
-  process.arch === "x64" ? "amd64" : process.arch}`;
-
-async function fetchAntigravityUsage({ credential, force = false, credentialStore } = {}) {
-  const token = credential?.token?.access_token;
-  if (!token) throw new Error("AGY 로그인 정보가 없습니다.");
-  const key = tokenKey("agy", credential?.token?.refresh_token || token);
-
-  return cached(key, () => withAntigravityCredential(credential, async (accessToken) => {
-    const headers = {
-      authorization: `Bearer ${accessToken}`,
-      "content-type": "application/json",
-      "user-agent": AGY_USER_AGENT,
+function runAgyUsageCli(commandPath, needsShell = false) {
+  return new Promise((resolve) => {
+    let stdout = "";
+    let stderr = "";
+    let timedOut = false;
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
     };
-    const [assist, identity] = await Promise.all([
-      json("https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist", {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ metadata: { pluginType: "GEMINI" } }),
-      }),
-      fetchAntigravityIdentity({ credential, credentialStore }).catch(() => ({})),
-    ]);
-    const projectValue = assist?.cloudaicompanionProject;
-    const project = typeof projectValue === "string" ? projectValue : projectValue?.id;
-    if (!project) throw new Error("AGY 프로젝트 정보를 찾지 못했습니다.");
-    const quota = await json(
-      "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
-      {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ project }),
-      }
-    );
-    const gauges = normalizeAgyQuota(quota);
-    if (!gauges.some((gauge) => /\bgemini\b/i.test(gauge.label))) {
-      try {
-        const models = await json("https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels", {
-          method: "POST", headers, body: JSON.stringify({ project }),
-        });
-        gauges.push(...normalizeAgyGeminiQuota(models));
-      } catch (error) {
-        // Let the existing credential handler retry an expired token. Other
-        // optional-model failures must not discard the working summary quota.
-        if (error.status === 401) throw error;
-      }
+    let child;
+    try {
+      child = spawn(needsShell ? `"${commandPath}"` : commandPath, ["-p", "/usage"], {
+        shell: Boolean(needsShell),
+        windowsHide: true,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    } catch (error) {
+      resolve({ code: null, stdout: "", stderr: "", timedOut: false, error });
+      return;
     }
-    return {
-      provider: "agy",
-      email: identity.email || null,
-      plan: tierLabel(assist),
-      gauges,
-    };
-  }, { store: credentialStore }), { force });
+    const timer = setTimeout(() => {
+      timedOut = true;
+      try { child.kill(); } catch {}
+    }, AGY_CLI_TIMEOUT_MS);
+    if (typeof timer.unref === "function") timer.unref();
+    child.stdout?.on("data", (chunk) => {
+      if (stdout.length < AGY_MAX_OUTPUT_BYTES) stdout += chunk.toString("utf8");
+    });
+    child.stderr?.on("data", (chunk) => {
+      if (stderr.length < AGY_MAX_OUTPUT_BYTES) stderr += chunk.toString("utf8");
+    });
+    child.once("error", (error) => finish({ code: null, stdout, stderr, timedOut, error }));
+    child.once("close", (code) => finish({ code, stdout, stderr, timedOut, error: null }));
+  });
 }
 
-async function fetchAntigravityIdentity({ credential, force = false, credentialStore } = {}) {
-  const token = credential?.token?.access_token;
-  if (!token) throw new Error("AGY 로그인 정보가 없습니다.");
-  const key = tokenKey("agy:identity", credential?.token?.refresh_token || token);
-  return cached(key, () => withAntigravityCredential(credential, async (accessToken) => {
-    const identity = await json("https://www.googleapis.com/oauth2/v2/userinfo", {
-      headers: { authorization: `Bearer ${accessToken}` },
-    });
-    return { email: identity?.email || null };
-  }, { store: credentialStore }), { force });
+async function fetchAntigravityUsage({
+  commandPath,
+  needsShell = false,
+  force = false,
+  accountHint = "",
+  runCli = runAgyUsageCli,
+  ttl = AGY_CACHE_TTL_MS,
+} = {}) {
+  if (!commandPath) {
+    throw new Error("AGY CLI가 설치되어 있지 않습니다.");
+  }
+  const key = tokenKey("agy", accountHint || commandPath);
+  return cached(key, async () => {
+    const result = await runCli(commandPath, needsShell);
+    if (result?.error) {
+      throw new Error("AGY CLI를 실행하지 못했습니다.");
+    }
+    const combined = `${result?.stdout || ""}\n${result?.stderr || ""}`;
+    if (AGY_SIGNED_OUT.test(combined)) {
+      throw new HttpError("AGY 로그인이 필요합니다.", 401);
+    }
+    if (result?.timedOut || result?.code !== 0) {
+      throw new Error("AGY 사용 한도 정보를 조회하지 못했습니다.");
+    }
+    const gauges = parseAgyUsage(result.stdout);
+    if (!gauges.length) {
+      throw new Error("AGY CLI가 표시할 사용 한도 정보를 반환하지 않았습니다.");
+    }
+    return { provider: "agy", gauges };
+  }, { ttl, force });
 }
 
 module.exports = {
   clearUsageCache,
-  fetchAntigravityIdentity,
   fetchAntigravityUsage,
   fetchClaudeUsage,
-  normalizeAgyQuota,
-  normalizeAgyGeminiQuota,
   normalizeClaudeUsage,
   normalizeGrokUsage,
+  parseAgyUsage,
   readGrokUsage,
-  tierLabel,
 };

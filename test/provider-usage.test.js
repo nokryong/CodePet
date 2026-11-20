@@ -7,12 +7,10 @@ const {
   clearUsageCache,
   fetchAntigravityUsage,
   fetchClaudeUsage,
-  normalizeAgyQuota,
-  normalizeAgyGeminiQuota,
   normalizeClaudeUsage,
   normalizeGrokUsage,
+  parseAgyUsage,
   readGrokUsage,
-  tierLabel,
 } = require("../src/provider-usage");
 
 function jsonResponse(value, status = 200) {
@@ -23,130 +21,61 @@ function jsonResponse(value, status = 200) {
   };
 }
 
-const partnerQuota = { groups: [{ displayName: "Claude and GPT models",
-  buckets: [{ displayName: "Weekly Limit Remaining", remainingFraction: 1, resetTime: "2026-11-03T01:00:00Z" }] }] };
-const geminiModels = { models: {
-  "gemini-flash": { displayName: "Gemini Flash", quotaInfo: { remainingFraction: 0.7, resetTime: "2026-11-03T02:00:00Z" } },
-} };
+test("AGY CLI /usage 출력에서 모델 그룹과 남은 비율을 사용률로 정규화한다", () => {
+  const sample = [
+    "Gemini Models\tWeekly Limit Remaining\t56%\t2026-11-25T07:32:02Z",
+    "Gemini Models\tFive Hour Limit Remaining\t96%\t2026-11-20T10:55:49Z",
+    "Gemini 4 Argon\tGemini 4 Argon Weekly Limit\t49%\t2026-11-25T07:35:20Z",
+    "Invalid row without percentage",
+  ].join("\n");
 
-function mockAgyQuota(t, { summary = partnerQuota, models = geminiModels, modelStatus = 200 } = {}) {
+  assert.deepEqual(parseAgyUsage(sample), [
+    { label: "Gemini Models · Weekly Limit", usedPercent: 44, resetText: "2026-11-25T07:32:02Z" },
+    { label: "Gemini Models · Five Hour Limit", usedPercent: 4, resetText: "2026-11-20T10:55:49Z" },
+    { label: "Gemini 4 Argon · Weekly Limit", usedPercent: 51, resetText: "2026-11-25T07:35:20Z" },
+  ]);
+});
+
+test("AGY 사용량은 직접 API 호출 없이 공식 agy CLI 실행 결과를 캐싱해 반환한다", async (t) => {
   clearUsageCache();
   t.after(() => clearUsageCache());
-  const requests = [];
-  t.mock.method(global, "fetch", async (url, options) => {
-    requests.push({ url, options });
-    if (url.endsWith(":loadCodeAssist")) return jsonResponse({ cloudaicompanionProject: { id: "projects/test" } });
-    if (url.includes("userinfo")) return jsonResponse({ email: "agy@example.com" });
-    if (url.endsWith(":retrieveUserQuotaSummary")) return jsonResponse(summary);
-    if (url.endsWith(":fetchAvailableModels")) return jsonResponse(models, modelStatus);
-    throw new Error("Unexpected endpoint");
-  });
-  return requests;
-}
-
-test("Gemini tier catalog excludes legacy/internal models and collapses matching quota rows", () => {
-  const quotaInfo = { remainingFraction: 1, resetTime: "reset" };
-  const models = { models: {
-    "gemini-lite": { displayName: "Gemini Lite", quotaInfo },
-    "gemini-tiered": { quotaInfo },
-    "gemini-legacy": { displayName: "Gemini Legacy", quotaInfo: { remainingFraction: 0 } },
-    "gemini-hidden": { displayName: "Gemini Internal", isInternal: true, quotaInfo: { remainingFraction: 0 } },
-    "tab_internal": { quotaInfo },
-    "claude-sonnet": { displayName: "Claude Sonnet", quotaInfo },
-  }, tieredModelIds: { flashLite: ["gemini-lite"], flash: ["gemini-tiered"], pro: ["gemini-tiered", "gemini-hidden"] } };
-  assert.deepEqual(normalizeAgyGeminiQuota(models), [{ label: "Gemini", usedPercent: 0, resetText: "reset" }]);
-});
-
-test("Gemini fallback preserves different model limits, deduplicates aliases and keeps explicit zero", () => {
-  const flash = { displayName: "Gemini Flash", quotaInfo: { remainingFraction: "0.7", resetTime: "first" } };
-  assert.deepEqual(normalizeAgyGeminiQuota({ models: {
-    "gemini-flash": flash, "gemini-alias": flash,
-    "gemini-pro": { displayName: "Gemini Pro", quota_info: { remaining_fraction: 0, reset_time: "second" } },
-  } }), [
-    { label: "Gemini Flash", usedPercent: 30, resetText: "first" },
-    { label: "Gemini Pro", usedPercent: 100, resetText: "second" },
-  ]);
-});
-
-test("missing or malformed Gemini quota never becomes a full balance or falls back to stale aliases", () => {
-  for (const value of [undefined, null, "", " ", false, {}, "unknown", NaN, Infinity]) {
-    assert.deepEqual(normalizeAgyGeminiQuota({ models: {
-      "gemini-flash": { displayName: "Gemini Flash", quotaInfo: { remainingFraction: value } },
-    } }), []);
-  }
-  assert.deepEqual(normalizeAgyGeminiQuota({ tieredModelIds: { flash: ["gemini-current"] }, models: {
-    "gemini-current": { displayName: "Gemini", quotaInfo: {} },
-    "gemini-old": { displayName: "Gemini Old", quotaInfo: { remainingFraction: 1 } },
-  } }), []);
-  assert.deepEqual(normalizeAgyGeminiQuota(null), []);
-});
-
-test("AGY supplements a partner-only summary with Gemini using the same project and credential", async (t) => {
-  const requests = mockAgyQuota(t);
-  const result = await fetchAntigravityUsage({ credential: { token: { access_token: "test-access" } }, force: true });
-  assert.deepEqual(result.gauges, [
-    ...normalizeAgyQuota(partnerQuota), { label: "Gemini", usedPercent: 30, resetText: "2026-11-03T02:00:00Z" },
-  ]);
-  const modelRequest = requests.find(({ url }) => url.endsWith(":fetchAvailableModels"));
-  assert.deepEqual(JSON.parse(modelRequest.options.body), { project: "projects/test" });
-  assert.equal(modelRequest.options.headers.authorization, "Bearer test-access");
-});
-
-test("AGY keeps authoritative Gemini summary windows without an extra model request", async (t) => {
-  const summary = { groups: [{ displayName: "Gemini models", buckets: [
-    { displayName: "5-hour Remaining", remainingFraction: 0.5 },
-    { displayName: "Weekly Remaining", remainingFraction: 0.2 },
-  ] }] };
-  const requests = mockAgyQuota(t, { summary });
-  const result = await fetchAntigravityUsage({ credential: { token: { access_token: "test-access" } }, force: true });
-  assert.deepEqual(result.gauges, normalizeAgyQuota(summary));
-  assert.equal(requests.some(({ url }) => url.endsWith(":fetchAvailableModels")), false);
-});
-
-test("a failed optional Gemini request preserves the existing partner quota", async (t) => {
-  mockAgyQuota(t, { modelStatus: 503 });
-  const result = await fetchAntigravityUsage({ credential: { token: { access_token: "test-access" } }, force: true });
-  assert.deepEqual(result.gauges, normalizeAgyQuota(partnerQuota));
-});
-
-test("Gemini authentication failures use the existing credential refresh and retry path", async (t) => {
-  clearUsageCache(); t.after(() => clearUsageCache());
-  const current = { token: { access_token: "refreshed", refresh_token: "same-account" } };
-  const headers = [];
-  t.mock.method(global, "fetch", async (url, options) => {
-    if (url.includes("userinfo")) return jsonResponse({ email: "agy@example.com" });
-    if (url.endsWith(":loadCodeAssist")) return jsonResponse({ cloudaicompanionProject: "projects/test" });
-    if (url.endsWith(":retrieveUserQuotaSummary")) return jsonResponse(partnerQuota);
-    if (url.endsWith(":fetchAvailableModels")) {
-      headers.push(options.headers.authorization);
-      return jsonResponse(geminiModels, options.headers.authorization === "Bearer refreshed" ? 200 : 401);
-    }
-    throw new Error("Unexpected endpoint");
-  });
+  let calls = 0;
   const result = await fetchAntigravityUsage({
-    credential: { token: { access_token: "expired", refresh_token: "same-account" } }, force: true,
-    credentialStore: { read: async () => current, write: () => { throw new Error("Already refreshed; must not write"); } },
+    commandPath: "C:\\agy\\bin\\agy.exe",
+    accountHint: "agy@example.com",
+    runCli: async (commandPath, needsShell) => {
+      calls += 1;
+      assert.equal(commandPath, "C:\\agy\\bin\\agy.exe");
+      assert.equal(needsShell, false);
+      return {
+        code: 0,
+        stdout: "Gemini Models\tWeekly Limit Remaining\t75%\t2026-11-25T07:32:02Z\n",
+        stderr: "",
+        timedOut: false,
+      };
+    },
   });
-  assert.deepEqual(headers, ["Bearer expired", "Bearer refreshed"]);
-  assert.equal(result.gauges.at(-1).label, "Gemini");
+  assert.deepEqual(result.gauges, [
+    { label: "Gemini Models · Weekly Limit", usedPercent: 25, resetText: "2026-11-25T07:32:02Z" },
+  ]);
+  await fetchAntigravityUsage({
+    commandPath: "C:\\agy\\bin\\agy.exe",
+    accountHint: "agy@example.com",
+    runCli: async () => { throw new Error("Cache should avoid extra CLI invocation"); },
+  });
+  assert.equal(calls, 1);
 });
 
-test("AGY 한도는 남은 비율을 사용률로 바꾸고 잘못된 bucket은 제외한다", () => {
-  assert.deepEqual(
-    normalizeAgyQuota({
-      groups: [
-        {
-          displayName: "모델",
-          buckets: [
-            { displayName: "주간", remainingFraction: 0.25, resetTime: "soon" },
-            { displayName: "누락" },
-            { displayName: "null", remainingFraction: null },
-            { displayName: "빈 값", remainingFraction: "" },
-          ],
-        },
-      ],
+test("AGY CLI가 로그아웃 상태를 반환하면 401 오류로 알린다", async (t) => {
+  clearUsageCache();
+  t.after(() => clearUsageCache());
+  await assert.rejects(
+    () => fetchAntigravityUsage({
+      commandPath: "agy",
+      force: true,
+      runCli: async () => ({ code: 1, stdout: "", stderr: "Please sign in first", timedOut: false }),
     }),
-    [{ label: "모델 · 주간", usedPercent: 75, resetText: "soon" }]
+    (error) => error.status === 401 && /로그인/.test(error.message)
   );
 });
 
@@ -159,36 +88,6 @@ test("Claude 한도는 전체 및 모델별 창을 표시하고 범위를 보정
   });
   assert.deepEqual(gauges.map((item) => item.label), ["5시간", "7일", "7일 · Sonnet"]);
   assert.deepEqual(gauges.map((item) => item.usedPercent), [50, 100, 25]);
-});
-
-test("AGY 응답에서 계정, 플랜, 한도만 정규화한다", async (t) => {
-  const originalFetch = global.fetch;
-  t.after(() => {
-    global.fetch = originalFetch;
-    clearUsageCache();
-  });
-  global.fetch = async (url) => {
-    if (String(url).includes("loadCodeAssist")) {
-      return jsonResponse({
-        cloudaicompanionProject: "projects/test",
-        currentTier: { displayName: "Antigravity" },
-        paidTier: { name: "Google AI Pro" },
-      });
-    }
-    if (String(url).includes("userinfo")) return jsonResponse({ email: "agy@example.com" });
-    return jsonResponse({
-      groups: [{ displayName: "모델", buckets: [{ displayName: "5시간", remainingFraction: 0.8 }] }],
-    });
-  };
-
-  const result = await fetchAntigravityUsage({
-    credential: { token: { access_token: "access", refresh_token: "refresh" } },
-    force: true,
-  });
-  assert.equal(result.email, "agy@example.com");
-  assert.equal(result.plan, "Google AI Pro");
-  assert.equal(result.gauges[0].usedPercent, 20);
-  assert.equal(tierLabel({ currentTier: { name: "free-tier" } }), "free-tier");
 });
 
 test("Grok billing 로그에서 구독 플랜과 주간 한도를 읽는다", (t) => {

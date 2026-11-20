@@ -35,7 +35,6 @@ const { AntigravityAccountSwitcher } = require("./antigravity-account-switcher")
 const { createAntigravityCredentialStore } = require("./antigravity-credential");
 const {
   clearUsageCache,
-  fetchAntigravityIdentity,
   fetchClaudeUsage,
   fetchAntigravityUsage,
   readGrokUsage,
@@ -1528,6 +1527,10 @@ function grokCommandCandidates() {
   return cliCandidates("grok", process.platform, process.env, os.homedir());
 }
 
+function resolveAgyCommand() {
+  return resolveCommand("agy", cliCandidates("agy", process.platform, process.env, os.homedir()));
+}
+
 function resolveAntigravityExecutable() {
   if (process.platform === "darwin") {
     const appPath = "/Applications/Antigravity.app";
@@ -2979,25 +2982,8 @@ async function startProviderLogin(provider) {
   if (provider === "codex") return Boolean(await openCodexLoginTerminal());
 
   if (provider === "agy") {
-    let meta = {};
-    try {
-      const credential = await antigravityAccountSwitcher.read();
-      try {
-        const identity = await fetchAntigravityIdentity({ credential, force: true });
-        meta.email = identity.email;
-      } catch {
-        // 한도 API와 별개인 계정 조회가 막히면 기존 저장 메타데이터를 유지합니다.
-      }
-      try {
-        const current = await fetchAntigravityUsage({ credential, force: true });
-        meta = { email: current.email || meta.email, plan: current.plan };
-      } catch {
-        // 한도 조회가 막혀도 확인한 이메일과 현재 자격 증명은 저장할 수 있습니다.
-      }
-    } catch {
-      // 처음 로그인하는 PC라면 저장할 현재 계정이 없습니다.
-    }
-    await antigravityAccountSwitcher.prepareLogin(meta);
+    const email = antigravityAccountSwitcher.currentAccountHint();
+    await antigravityAccountSwitcher.prepareLogin(email ? { email } : {});
     clearUsageCache("agy");
     refreshTrayMenu();
     return true;
@@ -3725,45 +3711,41 @@ async function loadCodexUsage() {
 }
 
 async function loadAntigravityProvider(forceUsage) {
-  let credential;
-  try {
-    credential = await antigravityAccountSwitcher.read();
-    if (!credential?.token?.access_token) throw new Error("로그인 필요");
-  } catch {
+  const commandPath = resolveAgyCommand();
+  const accountHint = antigravityAccountSwitcher.currentAccountHint() || "";
+  if (!commandPath) {
     return {
       accounts: antigravityAccountSwitcher.listProfiles(),
-      usage: { id: "agy", label: "AGY", error: "로그인 필요", gauges: [] },
+      usage: { id: "agy", label: "AGY", error: "AGY CLI 미설치", gauges: [] },
     };
-  }
-
-  let identity = {};
-  try {
-    identity = await fetchAntigravityIdentity({ credential, force: forceUsage });
-  } catch {
-    // 계정 조회가 막혀도 저장된 힌트와 한도 조회는 각각 계속 시도합니다.
-  }
-  try {
-    await antigravityAccountSwitcher.snapshotCurrent({ email: identity.email });
-  } catch {
-    // 로그인 정보 자체가 없으면 아래 한도 조회에서 로그인 오류로 처리합니다.
   }
 
   let usage;
   try {
-    const data = await fetchAntigravityUsage({ credential, force: forceUsage });
-    await antigravityAccountSwitcher.snapshotCurrent({
-      email: data.email || identity.email,
-      plan: data.plan,
+    const data = await fetchAntigravityUsage({
+      commandPath,
+      needsShell: commandNeedsShell(commandPath, process.platform),
+      force: forceUsage,
+      accountHint,
     });
+    try {
+      await antigravityAccountSwitcher.snapshotCurrent(accountHint ? { email: accountHint } : {});
+    } catch {
+      // 로그인 저장소가 없어도 CLI가 응답한 사용량은 표시합니다.
+    }
     usage = { id: "agy", label: "AGY", gauges: data.gauges };
   } catch (error) {
     try {
-      await antigravityAccountSwitcher.snapshotCurrent();
+      await antigravityAccountSwitcher.snapshotCurrent(accountHint ? { email: accountHint } : {});
     } catch {
       // 로그인 정보 자체가 없으면 저장할 프로필도 없습니다.
     }
-    usage = { id: "agy", label: "AGY", error: error.status === 401 || error.status === 400
-      ? "AGY 재로그인 필요" : "조회 불가", gauges: [] };
+    usage = {
+      id: "agy",
+      label: "AGY",
+      error: error.status === 401 ? "로그인 필요" : "조회 불가",
+      gauges: [],
+    };
   }
   return { accounts: antigravityAccountSwitcher.listProfiles(), usage };
 }

@@ -1,5 +1,17 @@
 # Release notes / 릴리즈 노트
 
+## 1.3.1 — 2026-11-20
+
+### English
+
+- Read Antigravity usage via the installed AGY CLI’s `/usage` command and cache results for five minutes.
+- Remove direct internal API calls, OAuth client secret extraction, and direct token refresh from Antigravity usage checks.
+
+### 한국어
+
+- 설치된 AGY CLI의 `/usage` 명령으로 Antigravity 사용량을 조회하고 5분간 캐시합니다.
+- Antigravity 사용량을 조회하던 내부 API 호출과 OAuth 앱 시크릿 추출 및 직접 토큰 갱신 코드를 제거했습니다.
+
 ## 1.3.0 — 2026-11-20
 
 ### English

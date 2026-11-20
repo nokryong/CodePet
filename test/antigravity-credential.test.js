@@ -133,31 +133,6 @@ test("갱신 저장 직전에 Keychain을 읽지 못해도 다른 파일 계정�
   assert.equal(fs.readFileSync(tokenFile(home), "utf8"), fileCredential);
 });
 
-test("실제 토큰 갱신도 Keychain 계정을 유지하고 다른 파일 계정은 보존한다", async (t) => {
-  const { withAntigravityCredential } = require("../src/antigravity-auth");
-  const home = tempHome(t);
-  fs.mkdirSync(path.dirname(tokenFile(home)), { recursive: true });
-  const fileCredential = JSON.stringify(credential("other-account"));
-  fs.writeFileSync(tokenFile(home), fileCredential);
-  const original = credential("active-account", "2020-01-01T00:00:00Z");
-  original.id_token = `header.${Buffer.from(JSON.stringify({ aud: "test.apps.googleusercontent.com" })).toString("base64url")}.signature`;
-  const keychain = memoryKeychain(JSON.stringify(original));
-  const live = createAntigravityCredentialStore({ platform: "darwin", home, keychain });
-  const store = { read: async () => JSON.parse(await live.read()), write: (value, options) => live.write(value, options) };
-  const result = await withAntigravityCredential(await store.read(), async (token) => token, {
-    store,
-    resolveClient: async (clientId) => ({ clientId, clientSecret: "test-public-client" }),
-    fetchImpl: async (_url, request) => {
-      assert.equal(request.body.get("refresh_token"), "active-account");
-      return { ok: true, json: async () => ({ access_token: "fresh", expires_in: 3600 }) };
-    },
-  });
-  assert.equal(result, "fresh");
-  assert.equal(JSON.parse(keychain.value).token.access_token, "fresh");
-  assert.equal(JSON.parse(keychain.value).token.refresh_token, "active-account");
-  assert.equal(fs.readFileSync(tokenFile(home), "utf8"), fileCredential);
-});
-
 test("CLI 저장소 밖의 standalone 계정 파일은 읽거나 삭제하지 않는다", async (t) => {
   const home = tempHome(t);
   const standaloneFile = path.join(home, ".gemini", "jetski-standalone-oauth-token");
