@@ -1,5 +1,17 @@
 # Release notes / 릴리즈 노트
 
+## 1.3.0 — 2026-11-20
+
+### English
+
+- Release the hidden pet window after 30 seconds to reduce idle memory usage. Reopen it from the tray; provider log watchers keep running.
+- Add an opt-in Windows native pet when launching from Node with `node bin/code-pet.js --native-pet`. Chat, Settings, Usage, and Live open in Electron on demand. The standard mode still provides automatic movement, activity bubbles, the taskbar quota widget, and local Codex proxy management.
+
+### 한국어
+
+- 트레이로 숨긴 펫 창을 30초 뒤 닫아 메모리 사용량을 줄입니다. 트레이에서 다시 열 수 있으며, 제공자 로그 감시는 계속됩니다.
+- Windows에서 Node로 실행할 때 선택할 수 있는 네이티브 펫 모드(`node bin/code-pet.js --native-pet`)를 추가했습니다. 채팅·설정·사용량·Live는 필요할 때만 Electron에서 열립니다. 자동 이동·활동 말풍선·작업 표시줄 사용량 위젯·Codex 로컬 프록시 관리는 기존 모드에서 제공됩니다.
+
 ## 1.2.2 — 2026-10-29
 
 ### English
