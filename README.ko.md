@@ -138,3 +138,9 @@ npm test
 `npm run dist`로 현재 운영체제용 패키지를 만들면 `artifacts/`에 배포 파일만 추가되고 임시 빌드 파일은 정리됩니다. 빌드 전에는 CodePet을 종료하세요. 릴리스 워크플로는 Windows·Linux·macOS 패키지와 체크섬을 생성합니다.
 
 Linux에서 FUSE 마운트를 사용할 수 없으면 AppImage에 `--appimage-extract-and-run` 옵션을 붙여 실행하세요. 배포 AppImage에는 AppImageUpdate용 `.zsync` 파일이 함께 제공됩니다. Wayland에서 펫 자동 이동을 사용하려면 XWayland가 필요하며, 사용자가 지정한 Electron 플랫폼 설정을 우선합니다.
+
+### Windows 네이티브 펫 실험 모드
+
+Windows에서 기존 CodePet을 종료한 뒤 저장소에서 `node bin/code-pet.js --native-pet`을 실행하세요. 펫과 트레이는 .NET Framework로 실행하고, 채팅·설정·남은 한도·Live 창은 메뉴에서 열 때 Electron으로 실행합니다. 채팅이 진행 중이면 창을 닫아도 작업을 계속합니다. 처음 선택한 스프라이트를 읽을 때는 Electron으로 PNG 캐시를 한 번 만들어요.
+
+이 모드에서는 외부 CLI 작업을 감시해 펫의 애니메이션을 전환합니다. 자동 보행, 활동 말풍선, 작업표시줄 한도 위젯, Codex 로컬 프록시 관리는 기존 실행 모드에서 사용할 수 있습니다. 실험 모드는 저장소에서 실행하며 포터블 배포본은 기존 방식으로 실행합니다.
