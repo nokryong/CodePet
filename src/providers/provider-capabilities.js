@@ -2,6 +2,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { execFile, spawn } = require("node:child_process");
+const { providerCliEnv } = require("./cli-env");
 const { selectCommandPath, commandNeedsShell } = require("../command-resolution");
 const { claudeDesktopCandidates } = require("../claude-command");
 const { CATALOG_ERROR, normalizeCatalog, parseAgyModels, parseGrokCatalog,
@@ -101,6 +102,7 @@ function probeAgyModelCatalog(commandPath, needsShell, timeoutMs = MODEL_PROBE_T
     if (typeof hardTimer.unref === "function") hardTimer.unref();
     try {
       child = spawn(needsShell ? `"${commandPath}"` : commandPath, ["models"], {
+        env: providerCliEnv("agy"),
         shell: Boolean(needsShell),
         windowsHide: true,
         stdio: ["ignore", "pipe", "pipe"],
@@ -284,13 +286,13 @@ function guiEvidencePaths(providerId, platform, env) {
   ].filter((candidate) => candidate && !candidate.startsWith(pathApi.sep));
 }
 
-function defaultRunCommand(file, args, { timeoutMs = PROBE_TIMEOUT_MS, shell = false } = {}) {
+function defaultRunCommand(file, args, { timeoutMs = PROBE_TIMEOUT_MS, shell = false, env } = {}) {
   return new Promise((resolve) => {
     try {
       execFile(
         file,
         args,
-        { timeout: timeoutMs, windowsHide: true, shell, encoding: "utf8" },
+        { timeout: timeoutMs, windowsHide: true, shell, env, encoding: "utf8" },
         (error, stdout, stderr) => {
           resolve({
             ok: !error,
@@ -362,8 +364,9 @@ function createCapabilityService(options = {}) {
       : null;
   }
 
-  async function probeVersion(commandPath, needsShell) {
+  async function probeVersion(def, commandPath, needsShell) {
     const result = await runCommand(commandPath, ["--version"], {
+      env: providerCliEnv(def.id, undefined, platform),
       timeoutMs: PROBE_TIMEOUT_MS,
       shell: needsShell,
     });
@@ -380,6 +383,7 @@ function createCapabilityService(options = {}) {
       };
     }
     const result = await runCommand(commandPath, [...def.authProbeArgs], {
+      env: providerCliEnv(def.id, undefined, platform),
       timeoutMs: PROBE_TIMEOUT_MS,
       shell: needsShell,
     });
@@ -426,6 +430,7 @@ function createCapabilityService(options = {}) {
     if (def.id === "agy" && agyModelProbe) return agyModelProbe(commandPath, needsShell);
     if (!def.modelsProbeArgs) return null;
     const result = await runCommand(commandPath, [...def.modelsProbeArgs], {
+      env: providerCliEnv(def.id, undefined, platform),
       timeoutMs: MODEL_PROBE_TIMEOUT_MS,
       shell: needsShell,
     });
@@ -510,7 +515,7 @@ function createCapabilityService(options = {}) {
       cached.size === stat.size &&
       cached.version
     );
-    const version = cachedVersion || await probeVersion(commandPath, record.needsShell);
+    const version = cachedVersion || await probeVersion(def, commandPath, record.needsShell);
     if (!version) {
       record.status = "error";
       record.reason = `${def.name} CLI를 찾았지만 실행 확인(--version)에 실패했습니다.`;

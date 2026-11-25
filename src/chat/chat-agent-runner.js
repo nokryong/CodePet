@@ -1,4 +1,5 @@
 const { spawn } = require("node:child_process");
+const { providerCliEnv } = require("../providers/cli-env");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -288,7 +289,7 @@ function runAgentProcess({
     try {
       child = spawn(command, args, {
         cwd,
-        env,
+        env: providerCliEnv(provider, env, platform),
         shell: Boolean(needsShell),
         windowsHide: true,
         detached: platform !== "win32",
