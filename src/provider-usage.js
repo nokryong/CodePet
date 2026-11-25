@@ -1,4 +1,5 @@
 const { spawn } = require("node:child_process");
+const { providerCliEnv } = require("./providers/cli-env");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
@@ -239,6 +240,7 @@ function runAgyUsageCli(commandPath, needsShell = false) {
     let child;
     try {
       child = spawn(needsShell ? `"${commandPath}"` : commandPath, ["-p", "/usage"], {
+        env: providerCliEnv("agy"),
         shell: Boolean(needsShell),
         windowsHide: true,
         stdio: ["ignore", "pipe", "pipe"],

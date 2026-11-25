@@ -67,7 +67,7 @@ function claudeArgv({ permissionMode, workspace, model, effort, attachmentsDir, 
   }
   // workspace-write: 편집 자동 승인까지만. Bash 등 파괴 가능 도구는 기본 정책에 맡기고
   // 위험 우회 플래그는 절대 쓰지 않습니다.
-  argv.push("--permission-mode", "acceptEdits", "--strict-mcp-config");
+  argv.push("--permission-mode", "acceptEdits");
   if (autoApprove) argv.push("--dangerously-skip-permissions");
   argv.push("--add-dir", workspace);
   if (hasPathDeliveries && attachmentsDir) argv.push("--add-dir", attachmentsDir);

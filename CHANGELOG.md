@@ -1,5 +1,17 @@
 # Release notes / 릴리즈 노트
 
+## 1.3.2 — 2026-11-25
+
+### English
+
+- Claude can use its configured MCP servers in workspace-write mode. Chat and read-only sessions keep their tool restrictions.
+- On Windows, background Antigravity CLI calls skip the automatic update check that could briefly open a console.
+
+### 한국어
+
+- Claude가 작업공간 쓰기 모드에서 설정된 MCP 서버를 사용할 수 있습니다. 대화 및 읽기 모드의 도구 제한은 유지됩니다.
+- Windows에서 CodePet이 실행하는 Antigravity CLI의 자동 업데이트 확인으로 콘솔 창이 잠깐 뜨던 문제를 수정했습니다.
+
 ## 1.3.1 — 2026-11-20
 
 ### English

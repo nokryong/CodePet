@@ -88,6 +88,7 @@ test("claude workspace-read: 읽기 도구만 + add-dir", () => {
   const argv = result.argv;
   const toolsIndex = argv.indexOf("--tools");
   assert.equal(argv[toolsIndex + 1], "Read,Grep,Glob");
+  assert.ok(argv.includes("--strict-mcp-config"));
   assert.ok(!argv.includes("--permission-mode"));
   const addDirIndex = argv.indexOf("--add-dir");
   assert.equal(argv[addDirIndex + 1], WORKSPACE);
@@ -99,6 +100,7 @@ test("claude workspace-write: acceptEdits까지만", () => {
   const argv = result.argv;
   const modeIndex = argv.indexOf("--permission-mode");
   assert.equal(argv[modeIndex + 1], "acceptEdits");
+  assert.ok(!argv.includes("--strict-mcp-config"));
 });
 
 test("claude 모델/노력 플래그", () => {
