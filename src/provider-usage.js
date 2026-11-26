@@ -1,5 +1,6 @@
 const { spawn } = require("node:child_process");
 const { providerCliEnv } = require("./providers/cli-env");
+const { probeAgyModelCatalog } = require("./providers/provider-capabilities");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
@@ -25,16 +26,21 @@ function tokenKey(provider, token) {
   return `${provider}:${digest}`;
 }
 
-async function cached(key, load, { ttl = 60000, force = false } = {}) {
+async function cached(key, load, { ttl = 60000, force = false, rememberAuthFailure = false } = {}) {
   const old = cache.get(key);
-  if (!force && old && Date.now() - old.at < ttl) return old.value;
+  if (rememberAuthFailure && old?.pending) return old.value;
+  if (!force && old && (old.authFailed || Date.now() - old.at < ttl)) return old.value;
   const value = Promise.resolve().then(load);
-  cache.set(key, { at: Date.now(), value });
+  const entry = { at: Date.now(), value, pending: true };
+  cache.set(key, entry);
   try {
     return await value;
   } catch (error) {
-    if (cache.get(key)?.value === value) cache.delete(key);
+    if (rememberAuthFailure && error.status === 401) entry.authFailed = true;
+    else if (cache.get(key) === entry) cache.delete(key);
     throw error;
+  } finally {
+    entry.pending = false;
   }
 }
 
@@ -225,7 +231,38 @@ async function fetchClaudeUsage({ home = os.homedir(), force = false, credential
   }, { force });
 }
 
-function runAgyUsageCli(commandPath, needsShell = false) {
+async function readAuthenticatedAgyUsage(commandPath, needsShell, probeModels, runCli) {
+  // AGY 1.5.x can launch a URL opener even in print mode if the session
+  // expires between "models" and "/usage". Limit helper lookup for this
+  // child, while preserving native credential storage and the real account.
+  const env = { ...providerCliEnv("agy", process.env) };
+  for (const key of Object.keys(env)) {
+    if (key.toUpperCase() === "PATH" || key.toUpperCase() === "BROWSER") delete env[key];
+  }
+  env.PATH = "";
+  let helperDir;
+  try {
+    if (process.platform === "win32") {
+      env.NoDefaultCurrentDirectoryInExePath = "1";
+    } else {
+      const credentialTool = process.platform === "darwin" ? "/usr/bin/security" : "/usr/bin/secret-tool";
+      if (fs.existsSync(credentialTool)) {
+        helperDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "codepet-agy-"));
+        await fs.promises.symlink(credentialTool, path.join(helperDir, path.basename(credentialTool)));
+        env.PATH = helperDir;
+      }
+    }
+    // "models" checks the saved session without starting interactive OAuth.
+    const catalog = await probeModels(commandPath, needsShell, undefined, env);
+    if (catalog.authenticationRequired) throw new HttpError("AGY 로그인이 필요합니다.", 401);
+    if (!catalog.models.length) throw new Error("AGY 로그인 상태를 확인하지 못했습니다.");
+    return await runCli(commandPath, needsShell, env);
+  } finally {
+    if (helperDir) await fs.promises.rm(helperDir, { recursive: true, force: true });
+  }
+}
+
+function readAgyQuota(commandPath, needsShell, env) {
   return new Promise((resolve) => {
     let stdout = "";
     let stderr = "";
@@ -240,7 +277,7 @@ function runAgyUsageCli(commandPath, needsShell = false) {
     let child;
     try {
       child = spawn(needsShell ? `"${commandPath}"` : commandPath, ["-p", "/usage"], {
-        env: providerCliEnv("agy"),
+        env,
         shell: Boolean(needsShell),
         windowsHide: true,
         stdio: ["ignore", "pipe", "pipe"],
@@ -270,7 +307,8 @@ async function fetchAntigravityUsage({
   needsShell = false,
   force = false,
   accountHint = "",
-  runCli = runAgyUsageCli,
+  probeModels = probeAgyModelCatalog,
+  runCli = readAgyQuota,
   ttl = AGY_CACHE_TTL_MS,
 } = {}) {
   if (!commandPath) {
@@ -278,7 +316,7 @@ async function fetchAntigravityUsage({
   }
   const key = tokenKey("agy", accountHint || commandPath);
   return cached(key, async () => {
-    const result = await runCli(commandPath, needsShell);
+    const result = await readAuthenticatedAgyUsage(commandPath, needsShell, probeModels, runCli);
     if (result?.error) {
       throw new Error("AGY CLI를 실행하지 못했습니다.");
     }
@@ -294,7 +332,7 @@ async function fetchAntigravityUsage({
       throw new Error("AGY CLI가 표시할 사용 한도 정보를 반환하지 않았습니다.");
     }
     return { provider: "agy", gauges };
-  }, { ttl, force });
+  }, { ttl, force, rememberAuthFailure: true });
 }
 
 module.exports = {

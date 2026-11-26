@@ -28,7 +28,7 @@ class UsageMonitor extends EventEmitter {
         if (epoch !== this.epoch) return;
         const account = accounts.find((row) => row.active && row.hasAuth !== false);
         const old = this.rows.get(id);
-        const connected = Boolean(account) && usage.error !== "로그인 필요";
+        const connected = Boolean(account) && !usage.authRequired && usage.error !== "로그인 필요";
         const gauges = (usage.gauges || []).filter((g) => typeof g.usedPercent === "number" && Number.isFinite(g.usedPercent));
         const failed = Boolean(usage.error) || gauges.length === 0;
         const canKeep = connected && account.key === old.accountKey && old.gauges.length > 0;

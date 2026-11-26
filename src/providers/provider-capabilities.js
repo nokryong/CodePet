@@ -82,7 +82,7 @@ function probeCodexModelCatalog(commandPath, needsShell, timeoutMs = 8000, optio
   });
 }
 
-function probeAgyModelCatalog(commandPath, needsShell, timeoutMs = MODEL_PROBE_TIMEOUT_MS) {
+function probeAgyModelCatalog(commandPath, needsShell, timeoutMs = MODEL_PROBE_TIMEOUT_MS, env = providerCliEnv("agy")) {
   return new Promise((resolve) => {
     let child;
     let settled = false;
@@ -102,7 +102,7 @@ function probeAgyModelCatalog(commandPath, needsShell, timeoutMs = MODEL_PROBE_T
     if (typeof hardTimer.unref === "function") hardTimer.unref();
     try {
       child = spawn(needsShell ? `"${commandPath}"` : commandPath, ["models"], {
-        env: providerCliEnv("agy"),
+        env,
         shell: Boolean(needsShell),
         windowsHide: true,
         stdio: ["ignore", "pipe", "pipe"],
