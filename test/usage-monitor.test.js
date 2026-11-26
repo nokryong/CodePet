@@ -34,6 +34,21 @@ test("failed refresh preserves stale readings only for the same signed-in accoun
   assert.equal(monitor.snapshot().providers[0].connected, false);
 });
 
+test("AGY 인증이 끊기면 이전 한도 대신 조회 실패 상태를 게시한다", async () => {
+  let response = result();
+  let now = 0;
+  const monitor = new UsageMonitor([{ id: "agy", label: "AGY", load: async () => response }], { now: () => now });
+  await monitor.refresh();
+  now += monitor.intervalMs;
+  response = result("a", "조회 실패");
+  response.usage.authRequired = true;
+  await monitor.refresh();
+  const [row] = monitor.snapshot().providers;
+  assert.equal(row.error, "조회 실패");
+  assert.equal(row.connected, false);
+  assert.deepEqual(row.gauges, []);
+});
+
 test("account invalidation suppresses a late response from the previous account", async () => {
   let finish; let calls = 0;
   const monitor = new UsageMonitor([{ id: "a", label: "A", load: () => ++calls === 1

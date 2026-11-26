@@ -73,6 +73,8 @@ test("a native taskbar click opens one quota popup, releases it after hiding, an
       return { setVisible() {}, update() {}, dispose() {} };
     },
   });
+  const authFailure = { providers: [{ label: "AGY", connected: false, error: "조회 실패", gauges: [] }] };
+  monitor.emit("update", authFailure);
   assert.equal(windows.length, 0);
   click({ x: 1447, y: 1032, width: 227, height: 48 });
   assert.equal(windows.length, 1);
@@ -85,6 +87,9 @@ test("a native taskbar click opens one quota popup, releases it after hiding, an
   assert.ok(windows[0].options.y + windows[0].options.height <= 1032);
   click({ x: 1447, y: 1032, width: 227, height: 48 });
   assert.equal(windows[0].visible, false);
+  monitor.emit("update", authFailure);
+  assert.equal(windows[0].visible, false);
+  assert.deepEqual(windows[0].lastUpdate.snapshot, authFailure);
   assert.equal(windows.length, 1);
   t.mock.timers.tick(30000);
   assert.equal(windows[0].destroyed, true);

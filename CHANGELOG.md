@@ -1,5 +1,17 @@
 # Release notes / 릴리즈 노트
 
+## 1.3.3 — 2026-11-26
+
+### 한국어
+
+- Antigravity 자동 한도 조회 중 로그인이 필요하면 브라우저를 열지 않고 사용량 칸에만 `조회 실패`를 표시합니다.
+- 인증 실패 후에는 자동 재시도를 멈춥니다. 로그인 후 새로고침하거나 계정을 전환하면 한도를 다시 확인합니다.
+
+### English
+
+- Antigravity quota checks now report failures inline without opening a browser or interrupting your work.
+- Automatic checks pause after authentication fails. Refresh after signing in or switch accounts to retry.
+
 ## 1.3.2 — 2026-11-25
 
 ### English

@@ -3716,7 +3716,7 @@ async function loadAntigravityProvider(forceUsage) {
   if (!commandPath) {
     return {
       accounts: antigravityAccountSwitcher.listProfiles(),
-      usage: { id: "agy", label: "AGY", error: "AGY CLI 미설치", gauges: [] },
+      usage: { id: "agy", label: "AGY", error: "조회 실패", gauges: [] },
     };
   }
 
@@ -3735,15 +3735,11 @@ async function loadAntigravityProvider(forceUsage) {
     }
     usage = { id: "agy", label: "AGY", gauges: data.gauges };
   } catch (error) {
-    try {
-      await antigravityAccountSwitcher.snapshotCurrent(accountHint ? { email: accountHint } : {});
-    } catch {
-      // 로그인 정보 자체가 없으면 저장할 프로필도 없습니다.
-    }
     usage = {
       id: "agy",
       label: "AGY",
-      error: error.status === 401 ? "로그인 필요" : "조회 불가",
+      error: "조회 실패",
+      authRequired: error.status === 401,
       gauges: [],
     };
   }

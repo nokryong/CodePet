@@ -13,7 +13,7 @@ class Element {
   addEventListener() {}
 }
 function descendants(node) { return [node, ...node.children.flatMap(descendants)]; }
-function render(gauges) {
+function render(gauges, row = { label: "Codex", connected: true, account: "test@example.com" }) {
   const elements = new Map();
   const document = {
     createElement: (tag) => new Element(tag),
@@ -21,7 +21,7 @@ function render(gauges) {
     addEventListener() {},
   };
   const context = vm.createContext({ document, window: {}, data: { providers: [
-    { label: "Codex", connected: true, gauges, account: "test@example.com" },
+    { ...row, gauges },
   ] } });
   vm.runInContext(fs.readFileSync(path.join(__dirname, "..", "src", "usage-renderer.js"), "utf8"), context);
   vm.runInContext("render(data)", context);
@@ -34,6 +34,12 @@ test("quota popup shows remaining percentages and remaining-sized progress bars"
   assert.deepEqual(nodes.filter((n) => n.className?.startsWith("gauge ")).map((n) => n.className.trim()), ["gauge", "gauge", "gauge critical", "gauge critical", "gauge critical", "gauge", "gauge warning"]);
   assert.ok(nodes.filter((n) => n.tag === "progress").every((n) => n.attributes["aria-label"].includes("남은 한도")));
 });
+test("AGY 조회 실패는 기존 한도 영역의 텍스트로 표시한다", () => {
+  const nodes = render([], { label: "AGY", connected: false, error: "조회 실패" });
+  assert.ok(nodes.some(node => node.tag === "p" && node.textContent === "AGY: 조회 실패"));
+  assert.ok(!nodes.some(node => node.tag === "a" || node.tag === "dialog"));
+});
+
 test("unknown quota is not converted to a full balance", () => {
   const nodes = render([null, undefined, NaN, Infinity, "23"].map((usedPercent) => ({ label: "unknown", usedPercent })));
   assert.deepEqual(nodes.filter((n) => n.tag === "strong").map((n) => n.textContent), ["—", "—", "—", "—", "—"]);
