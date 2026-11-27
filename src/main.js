@@ -3891,7 +3891,7 @@ function openSettingsWindow(section = "general") {
     show: false,
     frame: false,
     title: "CodePet 설정",
-    backgroundColor: "#fafafa",
+    backgroundColor: "#ffffff",
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, "settings-preload.js"),

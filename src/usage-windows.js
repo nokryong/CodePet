@@ -18,7 +18,7 @@ function createUsageWindows({ electron, monitor, readSettings, writeSettings, op
     const win = new BrowserWindow({ ...bounds, frame: false, thickFrame: false, show: false,
       title: "CodePet 남은 한도",
       resizable: false, minimizable: false, maximizable: false, skipTaskbar: true,
-      alwaysOnTop: true, backgroundColor: "#fafafa", autoHideMenuBar: true,
+      alwaysOnTop: true, backgroundColor: "#ffffff", autoHideMenuBar: true,
       webPreferences: { preload: path.join(__dirname, "usage-preload.js"), contextIsolation: true, nodeIntegration: false, sandbox: true },
     });
     win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));

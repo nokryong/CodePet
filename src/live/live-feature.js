@@ -25,7 +25,7 @@ function createLiveFeature({ electron, root, defaultWorkspace = os.homedir(), ge
     if (window && !window.isDestroyed()) { if (window.isMinimized()) window.restore(); window.show(); window.focus(); return; }
     const win = new BrowserWindow({
       width: 760, height: 600, minWidth: 300, minHeight: 480, frame: false, resizable: true,
-      show: false, title: 'CodePet Live', backgroundColor: '#fafafa', autoHideMenuBar: true,
+      show: false, title: 'CodePet Live', backgroundColor: '#ffffff', autoHideMenuBar: true,
       webPreferences: { preload: path.join(__dirname, '..', 'live-preload.js'), contextIsolation: true,
         nodeIntegration: false, sandbox: true, backgroundThrottling: false, partition: 'persist:codepet-live' },
     });

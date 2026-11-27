@@ -38,6 +38,9 @@ const appEl = document.querySelector(".app");
 const sidebarEl = document.getElementById("sidebar");
 const sidebarResizer = document.getElementById("sidebar-resizer");
 const sidebarToggle = document.getElementById("sidebar-toggle");
+const jumpLatestButton = document.getElementById("btn-jump-latest");
+const composerEl = document.querySelector(".composer");
+const chatMainEl = document.querySelector(".chat-main");
 const approvalBackdrop = document.getElementById("approval-backdrop");
 const approvalSummary = document.getElementById("approval-summary");
 const approvalDetail = document.getElementById("approval-detail");
@@ -794,6 +797,18 @@ function openPopover(anchor, build) {
 popoverBackdrop.addEventListener("click", closePopover);
 window.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && !popover.hidden) closePopover();
+  const mod = event.ctrlKey || event.metaKey;
+  if (!mod || event.altKey || event.shiftKey || event.isComposing) return;
+  const key = event.key.toLowerCase();
+  if (key === "n") {
+    event.preventDefault();
+    if (!newSessionButton.disabled) newSessionButton.click();
+  } else if (key === "k") {
+    event.preventDefault();
+    if (appEl.classList.contains("is-sidebar-collapsed")) setSidebarCollapsed(false);
+    sessionSearchInput.focus();
+    sessionSearchInput.select();
+  }
 });
 
 function makeField(labelText, control) {
@@ -1370,6 +1385,20 @@ function quoteMessage(message) {
   if (pendingReplyTo) composerInput.focus();
 }
 
+function updateJumpLatest() {
+  jumpLatestButton.hidden = isNearBottom();
+}
+
+chatScroll.addEventListener("scroll", updateJumpLatest, { passive: true });
+jumpLatestButton.addEventListener("click", () => {
+  chatScroll.scrollTo({ top: chatScroll.scrollHeight, behavior: "smooth" });
+});
+new ResizeObserver(() => {
+  chatMainEl.style.setProperty("--composer-height", `${composerEl.offsetHeight}px`);
+  updateJumpLatest();
+}).observe(composerEl);
+new ResizeObserver(updateJumpLatest).observe(messageList);
+
 function isNearBottom() {
   return chatScroll.scrollHeight - chatScroll.scrollTop - chatScroll.clientHeight < 80;
 }
@@ -1381,12 +1410,19 @@ function scrollToBottom(force = false) {
 function renderMessageLabel(nameEl, message, live = false) {
   const agent = agentById(message.author);
   const saved = message.agentMeta || {};
-  const parts = [agent?.name || saved.name || message.author,
-    `@${agentMention(agent) || saved.mention || message.author}`,
-    modelLabel(saved.model || agent?.model),
-    effortLabel(saved.effort || agent?.effort || "추론 강도 확인 불가")];
-  if (live) parts.push("응답 중");
-  nameEl.textContent = parts.join(" · ");
+  const name = agent?.name || saved.name || message.author;
+  // Unknown model or effort adds noise to every message, so only known values are shown.
+  const details = [`@${agentMention(agent) || saved.mention || message.author}`];
+  const model = saved.model || agent?.model;
+  const effort = saved.effort || agent?.effort;
+  if (model) details.push(modelLabel(model));
+  if (effort) details.push(effortLabel(effort));
+  if (live) details.push("응답 중");
+  const detail = document.createElement("span");
+  detail.className = "name-detail";
+  detail.textContent = details.join(" · ");
+  nameEl.replaceChildren(document.createTextNode(name), detail);
+  nameEl.title = [name, ...details].join(" · ");
 }
 
 function refreshMessageLabels() {
