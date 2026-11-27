@@ -2,11 +2,17 @@
 
 **English** | [한국어](README.ko.md)
 
-[Download](https://github.com/nokryong/CodePet/releases/latest) · [Release notes](CHANGELOG.md) · [AppImage catalog](https://appimage.github.io/CodePet/)
+[v1.3.4](https://github.com/nokryong/CodePet/releases/tag/v1.3.4) · [Download](https://github.com/nokryong/CodePet/releases/latest) · [Release notes](CHANGELOG.md) · [AppImage catalog](https://appimage.github.io/CodePet/)
 
 A desktop pet for Codex, Antigravity (AGY), Claude Code, and Grok. Follow agent activity, check remaining usage limits, switch accounts, and talk to installed agents in a shared chat room.
 
 Supports Windows, Linux, and macOS.
+
+## What’s new in 1.3.4
+
+- Chat, Settings, Usage, and Live use a monochrome theme. Agent replies appear in the conversation body, and chat follows the system reduced-motion setting.
+- In agent chat, press Ctrl/Cmd+N to start a conversation and Ctrl/Cmd+K to focus session search. Use **Latest message** to return to the bottom after scrolling up.
+- Chat labels show the model and reasoning effort when CodePet identifies them. Bubble color previews show the defaults while appearance settings load.
 
 ## Getting started
 
@@ -25,6 +31,10 @@ On Windows portable builds, the update button in Settings downloads and applies 
 - **Launch at login:** Enable it from the context menu.
 
 Grok account-limit lookup is currently unavailable in the supported CLI.
+
+### Antigravity usage
+
+CodePet reads Antigravity usage through the installed AGY CLI’s `/usage` command and caches the result for five minutes. If AGY needs you to sign in, CodePet keeps the browser closed, shows the error in the usage panel, and pauses automatic checks. After signing in to AGY, refresh usage or switch accounts to resume checks. On Windows, background AGY calls skip the CLI’s automatic update check to avoid console pop-ups.
 
 ## Agent chat room
 
@@ -55,6 +65,8 @@ Choose a folder and permission mode for each session.
 | Workspace write | Allow project edits. Additional tool permissions may require approval. |
 
 Grok workspace access requires a local Docker Linux backend on Windows or Linux. Write mode edits an isolated copy; review the changes and choose **Apply all** to update the original files. On Linux, the current user must be able to run `docker info` without `sudo`.
+
+Claude uses its configured MCP servers in workspace-write mode. Chat-only and workspace-read modes retain their tool restrictions.
 
 Tool auto-approval is optional, configured per agent, and available only in workspace-write mode. Enable it only for trusted folders.
 
@@ -101,7 +113,7 @@ Linux AGY account storage requires Secret Service and `secret-tool` (`libsecret-
 | Click the taskbar display or tray icon | View remaining limits |
 | Click a supported Codex completion or waiting bubble | Open that conversation |
 
-**Hide** leaves CodePet running in the tray. Use **Quit completely** to exit.
+**Hide** closes the hidden pet window after 30 seconds to reduce idle memory. CodePet stays in the tray and continues watching agent logs. Reopen the pet from the tray or use **Quit completely** to exit.
 
 ## Pets
 
@@ -139,3 +151,9 @@ Open chat directly with `npx electron . --chat`, or check CLI setup with `node b
 Build for the current OS with `npm run dist`; only distributable packages are added to `artifacts/`, and temporary build files are removed. Close CodePet before building. The release workflow builds Windows, Linux, and macOS packages and includes checksums.
 
 On Linux without FUSE mounting, run the AppImage with `--appimage-extract-and-run`. Release AppImages include `.zsync` files for AppImageUpdate. Wayland users need XWayland for automatic pet movement; explicit Electron platform settings take precedence.
+
+### Experimental native pet on Windows
+
+Close CodePet and run `node bin/code-pet.js --native-pet` from the source checkout. The pet and tray run on .NET Framework. Chat, Settings, Usage, and Live open in Electron on demand. An active chat continues if you close its window. The first time you choose a sprite sheet, Electron prepares a PNG cache for it.
+
+The native pet follows external CLI activity. Automatic movement, activity bubbles, the taskbar usage widget, and local Codex proxy management are available in standard mode. The portable package starts in standard mode.
