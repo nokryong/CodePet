@@ -1,5 +1,19 @@
 # Release notes / 릴리즈 노트
 
+## 1.3.4 — 2026-11-27
+
+### 한국어
+
+- 채팅, 설정, 사용량 팝업, Live 창을 간결한 단색 디자인으로 개편했습니다.
+- Ctrl+N으로 새 채팅을 시작하고 Ctrl+K로 세션을 검색할 수 있습니다. 위로 스크롤한 뒤에는 ‘최신 메시지’ 버튼으로 돌아갈 수 있습니다.
+- 메시지에는 확인된 모델과 추론 강도만 표시합니다. 말풍선 색상 미리보기에는 설정을 불러오기 전에도 기본 색상을 표시합니다.
+
+### English
+
+- Redesigned the chat, settings, usage popup, and Live windows with a minimal monochrome style.
+- Press Ctrl+N to start a chat or Ctrl+K to search sessions. Use the latest-message button to return to the bottom.
+- Chat labels show the model and reasoning effort only when known. Bubble color previews show their defaults before appearance settings load.
+
 ## 1.3.3 — 2026-11-26
 
 ### 한국어
