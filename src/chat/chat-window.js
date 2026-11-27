@@ -10,7 +10,7 @@ function createChatWindow({ BrowserWindow, onReady, onClosed }) {
     show: false,
     frame: false,
     title: "CodePet 채팅",
-    backgroundColor: "#fafafa",
+    backgroundColor: "#ffffff",
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, "..", "chat-preload.js"),

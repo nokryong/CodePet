@@ -1,32 +1,77 @@
+/*
+ * Shared design tokens and window chrome for the chat, settings and Live
+ * windows. Loaded after each window's own stylesheet so these values win.
+ */
 :root {
   color-scheme: light;
-  --page: #fafafa;
-  --sidebar: #f4f4f5;
-  --surface: #fff;
-  --surface-strong: #fff;
-  --ink: #09090b;
-  --ink-soft: #27272a;
-  --muted: #52525b;
-  --line: #e4e4e7;
-  --line-strong: #d4d4d8;
-  --accent: #0f172a;
-  --accent-soft: #f4f4f5;
-  --danger: #ef4444;
-  --danger-soft: #fef2f2;
-  --shadow: 0 1px 3px #0000000d, 0 1px 2px #00000005;
-  --font-body: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
-  --font-display: "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+  /* Surfaces */
+  --page: #ffffff;
+  --sidebar: #f8f8f7;
+  --surface: #ffffff;
+  --surface-strong: #ffffff;
+  --surface-muted: #f8f8f7;
+  --fill: #f1f1f0;
+  --fill-strong: #e9e9e7;
+  --code-bg: #f6f6f5;
+  /* Text */
+  --ink: #171717;
+  --ink-soft: #2e2e2e;
+  --muted: #6b6b6b;
+  --faint: #9b9b9b;
+  /* Lines (used sparingly) */
+  --line: #efefee;
+  --line-strong: #e2e2e0;
+  /* Accent: monochrome */
+  --accent: #171717;
+  --accent-strong: #3a3a3a;
+  --accent-soft: #f1f1f0;
+  --accent-ink: #171717;
+  --accent-contrast: #ffffff;
+  /* Status */
+  --ok: #22a06b;
+  --warn: #d4880f;
+  --warn-soft: #fdf6e7;
+  --warn-ink: #8a5300;
+  --danger: #e5484d;
+  --danger-soft: #fdf0f0;
+  --danger-soft-strong: #fbe3e3;
+  --danger-ink: #b42318;
+  /* Interaction */
+  --focus: #a3a3a3;
+  --ring: 0 0 0 1px #d4d4d2, 0 0 0 4px #f1f1f0;
+  --selection: #e3e3e1;
+  --highlight: #fff0b3;
+  --scrim: rgba(23, 23, 23, 0.24);
+  --scrollbar: #dcdcda;
+  --scrollbar-hover: #c4c4c2;
+  /* Shape and depth */
+  --radius-s: 8px;
+  --radius-m: 12px;
+  --radius-l: 14px;
+  --radius-xl: 18px;
+  --shadow: none;
+  --shadow-sm: 0 0 0 0.5px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.06);
+  --shadow-pop: 0 0 0 0.5px rgba(0, 0, 0, 0.1), 0 8px 28px rgba(0, 0, 0, 0.1), 0 2px 6px rgba(0, 0, 0, 0.04);
+  --shadow-dialog: 0 0 0 0.5px rgba(0, 0, 0, 0.08), 0 24px 64px rgba(0, 0, 0, 0.16);
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+  /* Type */
+  --font-body: "Pretendard Variable", "Pretendard", "Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI", "Malgun Gothic", system-ui, sans-serif;
+  --font-display: "Pretendard Variable", "Pretendard", "Segoe UI Variable Display", "Segoe UI", "Malgun Gothic", system-ui, sans-serif;
+  --font-mono: "Cascadia Code", "D2Coding", Consolas, ui-monospace, monospace;
 }
-.titlebar { height: 36px; display: flex; align-items: center; justify-content: space-between; background: var(--sidebar); border-bottom: 1px solid var(--line); flex: none; user-select: none; }
-.titlebar-drag { flex: 1; height: 100%; display: flex; align-items: center; padding-left: 14px; gap: 8px; -webkit-app-region: drag; }
-.titlebar-logo { display: inline-flex; position: relative; width: 14px; height: 14px; flex: none; }
-.titlebar-logo i { position: absolute; display: block; width: 8px; height: 8px; border: 1px solid var(--accent); border-radius: 2px; }
-.titlebar-logo i:first-child { top: 0; left: 0; background: var(--accent-soft); }
-.titlebar-logo i:last-child { right: 0; bottom: 0; background: var(--surface); }
-.titlebar-title { font-family: var(--font-display); font-size: 12px; font-weight: 700; color: var(--ink-soft); letter-spacing: -.01em; }
+
+/* Window chrome: the title bar melts into the page, no divider. */
+.titlebar { height: 38px; display: flex; align-items: center; justify-content: space-between; background: var(--page); flex: none; user-select: none; }
+.titlebar-drag { flex: 1; height: 100%; display: flex; align-items: center; padding-left: 16px; gap: 8px; -webkit-app-region: drag; }
+.titlebar-logo { display: inline-block; position: relative; width: 12px; height: 12px; flex: none; }
+.titlebar-logo i { position: absolute; display: block; border-radius: 3px; }
+.titlebar-logo i:first-child { inset: 0; background: var(--ink); }
+.titlebar-logo i:last-child { width: 4px; height: 4px; right: 2px; bottom: 2px; border-radius: 50%; background: var(--page); }
+.titlebar-title { font-family: var(--font-display); font-size: 12px; font-weight: 600; color: var(--muted); letter-spacing: -.005em; }
 .titlebar-controls { display: flex; height: 100%; -webkit-app-region: no-drag; }
-.titlebar-btn { width: 46px; height: 100%; display: flex; align-items: center; justify-content: center; background: transparent; color: var(--ink-soft); border: 0; cursor: pointer; transition: background-color 100ms; }
+.titlebar-btn { width: 46px; height: 100%; display: flex; align-items: center; justify-content: center; background: transparent; color: var(--muted); border: 0; cursor: pointer; transition: background-color 100ms, color 100ms; }
 .titlebar-btn svg { width: 10px; height: 10px; fill: none; stroke: currentColor; stroke-width: 1.2; }
-.titlebar-btn:hover { background: var(--line); }
+.titlebar-btn:hover { background: var(--fill); color: var(--ink); }
 .titlebar-btn.btn-close:hover { background: #e81123; color: #fff; }
-.titlebar-btn:focus-visible { outline: 1.5px solid var(--accent); outline-offset: -3px; }
+.titlebar-btn:active { opacity: .75; }
+.titlebar-btn:focus-visible { outline: 2px solid var(--focus); outline-offset: -4px; }

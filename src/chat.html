@@ -36,22 +36,22 @@
       <aside class="sidebar" id="sidebar">
         <div class="sidebar-head">
           <span class="sidebar-title">세션</span>
-          <button class="button button-small" id="btn-new-session" type="button">+ 새 채팅</button>
+          <button class="button button-small" id="btn-new-session" type="button" title="새 채팅 (Ctrl+N)"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span>새 채팅</span></button>
         </div>
         <div class="session-search">
           <input
             id="session-search-input"
             type="search"
             aria-label="세션 메시지 검색"
-            placeholder="세션 메시지 검색"
+            placeholder="검색  (Ctrl+K)"
             autocomplete="off"
             spellcheck="false"
           />
         </div>
         <ul class="session-list" id="session-list" aria-label="세션 목록"></ul>
         <div class="sidebar-foot">
-          <button class="text-button" id="btn-doctor" type="button">환경 진단</button>
-          <button class="text-button" id="btn-refresh-providers" type="button" title="설치된 CLI를 다시 탐지합니다">CLI 다시 탐지</button>
+          <button class="text-button" id="btn-doctor" type="button"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h3l2-5 4 10 2-5h5"/></svg><span>환경 진단</span></button>
+          <button class="text-button" id="btn-refresh-providers" type="button" title="설치된 CLI를 다시 탐지합니다"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6"/></svg><span>CLI 다시 탐지</span></button>
         </div>
       </aside>
       <div
@@ -78,7 +78,7 @@
             <strong id="session-title" title="더블클릭하면 이름을 바꿀 수 있어요">세션</strong>
             <div class="room-controls">
               <button class="chip-button" id="btn-workspace" type="button" title="세션 워크스페이스 폴더">
-                <span class="chip-icon">📁</span><span id="workspace-label">워크스페이스 없음</span>
+                <svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7.5A1.5 1.5 0 0 1 4.5 6H9l2 2h8.5A1.5 1.5 0 0 1 21 9.5v8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z"/></svg><span id="workspace-label">워크스페이스 없음</span>
               </button>
               <select id="permission-select" aria-label="권한 모드">
                 <option value="chat">대화만 (도구 없음)</option>
@@ -86,15 +86,15 @@
                 <option value="workspace-write">워크스페이스 쓰기</option>
               </select>
               <span class="enforcement-hint" id="enforcement-hint"></span>
-              <button class="chip-button" id="btn-discussion" type="button" title="에이전트 토론 시작">💬 토론</button>
+              <button class="chip-button" id="btn-discussion" type="button" title="에이전트 토론 시작"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h11v8H8l-4 3z"/><path d="M15 9h5v8l-3-2h-6v-2"/></svg><span>토론</span></button>
               <button class="chip-button" id="btn-export-session" type="button" title="현재 세션을 마크다운 파일로 내보내기">
-                <span class="chip-icon" aria-hidden="true">⇩</span><span>내보내기</span>
+                <svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m-4-4 4 4 4-4M5 19h14"/></svg><span>내보내기</span>
               </button>
             </div>
           </div>
           <div class="room-actions">
             <div class="agent-chips" id="agent-chips" aria-label="참가자"></div>
-            <button class="chip-button" id="btn-add-account" type="button">계정 추가</button>
+            <button class="chip-button chip-button-outline" id="btn-add-account" type="button"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span>계정 추가</span></button>
           </div>
         </header>
 
@@ -105,6 +105,7 @@
           <ol class="message-list" id="message-list" aria-live="polite"></ol>
           <div class="typing-row" id="typing-row" hidden></div>
         </main>
+        <button type="button" class="jump-latest" id="btn-jump-latest" hidden><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14m-6-6 6 6 6-6"/></svg><span>최신 메시지</span></button>
 
         <footer class="composer">
           <div class="mention-popup" id="mention-popup" role="listbox" hidden></div>
@@ -128,15 +129,16 @@
             <button class="reply-preview-clear" id="btn-clear-reply" type="button" aria-label="인용 해제" title="인용 해제">×</button>
           </section>
           <div class="composer-box" id="composer-box">
-            <button class="icon-button" id="btn-attach" type="button" title="파일 첨부 (이미지·문서, 최대 20MiB)">＋</button>
+            <button class="icon-button" id="btn-attach" type="button" aria-label="파일 첨부" title="파일 첨부 (이미지·문서, 최대 20MiB)"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m20 11.5-7.8 7.8a5 5 0 0 1-7.1-7.1l8.5-8.5a3.3 3.3 0 0 1 4.7 4.7l-8.5 8.5a1.7 1.7 0 0 1-2.4-2.4l7.8-7.8"/></svg></button>
             <textarea
               id="composer-input"
               rows="1"
-              placeholder="참여 중인 에이전트에게 메시지…  (@로 대상 지정 · Enter 전송)"
+              placeholder="메시지 보내기  ·  @로 에이전트 지정"
               autocomplete="off"
             ></textarea>
-            <button class="button button-primary" id="btn-send" type="button">전송</button>
+            <button class="button button-primary" id="btn-send" type="button" aria-label="전송" title="전송 (Enter)"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5m-6 6 6-6 6 6"/></svg></button>
           </div>
+          <p class="composer-hint"><kbd>Enter</kbd> 보내기 · <kbd>Shift</kbd>+<kbd>Enter</kbd> 줄바꿈 · <kbd>Ctrl</kbd>+<kbd>N</kbd> 새 채팅 · <kbd>Ctrl</kbd>+<kbd>K</kbd> 검색</p>
         </footer>
       </div>
     </div>

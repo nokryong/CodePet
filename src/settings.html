@@ -32,7 +32,6 @@
           <span class="brand-mark" aria-hidden="true"><i></i><i></i></span>
           <span>
             <strong>CodePet</strong>
-            <small>WORKSPACE COMPANION</small>
           </span>
         </div>
 
@@ -47,7 +46,7 @@
             data-section="general"
             data-label="일반 및 모양"
           >
-            <span class="nav-index">01</span>
+            <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
             <span>일반 및 모양</span>
           </button>
           <button
@@ -61,7 +60,7 @@
             data-label="계정"
             tabindex="-1"
           >
-            <span class="nav-index">02</span>
+            <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>
             <span>계정</span>
           </button>
           <button
@@ -75,7 +74,7 @@
             data-label="사용량"
             tabindex="-1"
           >
-            <span class="nav-index">03</span>
+            <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V10m6 10V4m6 16v-7m4 7H3"/></svg>
             <span>사용량</span>
           </button>
         </nav>
@@ -108,8 +107,8 @@
           tabindex="0"
         >
           <header class="panel-heading">
-            <p class="eyebrow">APPEARANCE &amp; BEHAVIOR</p>
-            <h1>내 화면, 내 방식대로</h1>
+            <h1>일반 및 모양</h1>
+            <p>말풍선, 글꼴, 펫 동작을 정해요. 설정은 이 PC에만 저장돼요.</p>
           </header>
 
           <fieldset class="setting-section color-section">
@@ -119,14 +118,14 @@
               <div class="color-field">
                 <span class="color-label">배경 색상</span>
                 <div class="color-input-wrapper">
-                  <input type="color" id="bubble-bg-picker" />
+                  <input type="color" id="bubble-bg-picker" value="#ffffff" aria-label="말풍선 배경 색상" />
                   <input type="text" id="bubble-bg-color" placeholder="#ffffff" maxlength="9" />
                 </div>
               </div>
               <div class="color-field">
                 <span class="color-label">글자 색상</span>
                 <div class="color-input-wrapper">
-                  <input type="color" id="bubble-text-picker" />
+                  <input type="color" id="bubble-text-picker" value="#09090b" aria-label="말풍선 글자 색상" />
                   <input type="text" id="bubble-text-color" placeholder="#09090b" maxlength="7" />
                 </div>
               </div>
@@ -166,7 +165,7 @@
               </div>
 
               <div class="font-preview" id="font-preview" aria-live="polite">
-                <span class="preview-label">LIVE PREVIEW</span>
+                <span class="preview-label">미리보기</span>
                 <strong>오늘의 작업을<br />편안하게.</strong>
                 <p>CodePet이 작업 흐름을 알려드려요.</p>
                 <span class="preview-meta" id="font-preview-name">시스템 기본</span>
@@ -219,8 +218,8 @@
           hidden
         >
           <header class="panel-heading">
-            <p class="eyebrow">PROVIDERS</p>
             <h1>계정</h1>
+            <p>CLI별로 로그인한 계정을 확인하고 전환해요.</p>
           </header>
 
           <section class="setting-section" aria-labelledby="provider-list-title">
@@ -241,8 +240,8 @@
           hidden
         >
           <header class="panel-heading">
-            <p class="eyebrow">LIMITS</p>
             <h1>사용량</h1>
+            <p>계정별로 남은 한도와 초기화 시각을 보여줘요.</p>
           </header>
 
           <section class="setting-section" aria-labelledby="usage-list-title">
